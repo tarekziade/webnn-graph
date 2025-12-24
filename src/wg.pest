@@ -1,0 +1,44 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT    = _{ "#" ~ (!"\n" ~ ANY)* }
+
+file = { SOI ~ header ~ block* ~ EOI }
+header = { "webnn_graph" ~ string ~ "v" ~ int ~ "{" }
+block  = _{ inputs_block | consts_block | nodes_block | outputs_block | "}" }
+
+inputs_block  = { "inputs"  ~ "{" ~ input_decl* ~ "}" }
+consts_block  = { "consts"  ~ "{" ~ const_decl* ~ "}" }
+nodes_block   = { "nodes"   ~ "{" ~ stmt* ~ "}" }
+outputs_block = { "outputs" ~ "{" ~ output_item* ~ "}" }
+
+input_decl = { ident ~ ":" ~ ty ~ ";" }
+const_decl = { ident ~ ":" ~ ty ~ const_annot* ~ ";" }
+
+output_item = { ident ~ ("," ~ ident)* ~ ";"? }
+
+stmt = { (multi_assign | assign) ~ ";" }
+assign = { ident ~ "=" ~ expr }
+multi_assign = { "[" ~ ident ~ ("," ~ ident)* ~ "]" ~ "=" ~ expr }
+
+expr = { call | ident | literal }
+call = { ident ~ "(" ~ args? ~ ")" }
+args = { arg ~ ("," ~ arg)* }
+arg = { (ident ~ "=" ~ value) | value }
+
+value = { literal | ident }
+literal = _{ array | string | number | boolean | null }
+array = { "[" ~ (value ~ ("," ~ value)*)? ~ "]" }
+
+boolean = { "true" | "false" }
+null = { "null" }
+
+ty = { dtype ~ shape }
+dtype = { "f32" | "f16" | "i32" | "u32" | "i64" | "u64" | "i8" | "u8" }
+shape = { "[" ~ (int ~ ("," ~ int)*)? ~ "]" }
+
+// @weights("key") or @scalar(1.0)
+const_annot = { "@weights" ~ "(" ~ string ~ ")" | "@scalar" ~ "(" ~ number ~ ")" }
+
+ident = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+int = @{ ASCII_DIGIT+ }
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+string = @{ "\"" ~ ( "\\\"" | "\\\\" | (!"\"" ~ ANY) )* ~ "\"" }

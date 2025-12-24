@@ -1,0 +1,21 @@
+{
+  "format": "wg-weights-manifest",
+  "version": 1,
+  "endianness": "little",
+  "tensors": {
+    "W": {
+      "dataType": "float32",
+      "shape": [2048, 1000],
+      "byteOffset": 0,
+      "byteLength": 8192000,
+      "layout": "row-major"
+    },
+    "b": {
+      "dataType": "float32",
+      "shape": [1000],
+      "byteOffset": 8192000,
+      "byteLength": 4000,
+      "layout": "row-major"
+    }
+  }
+}

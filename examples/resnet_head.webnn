@@ -1,0 +1,18 @@
+webnn_graph "resnet_head" v1 {
+  inputs {
+    x: f32[1, 2048];
+  }
+
+  consts {
+    W: f32[2048, 1000] @weights("W");
+    b: f32[1000]       @weights("b");
+  }
+
+  nodes {
+    logits0 = matmul(x, W);
+    logits  = add(logits0, b);
+    probs   = softmax(logits, axis=1);
+  }
+
+  outputs { probs; }
+}
