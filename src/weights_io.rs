@@ -436,7 +436,7 @@ mod tests {
         fs::create_dir(&input_dir)?;
 
         // Create test tensor files
-        let tensor_data = vec![1.0f32, 2.0, 3.0, 4.0];
+        let tensor_data = [1.0f32, 2.0, 3.0, 4.0];
         let tensor_bytes: Vec<u8> = tensor_data.iter().flat_map(|f| f.to_le_bytes()).collect();
 
         fs::write(input_dir.join("test.bin"), &tensor_bytes)?;
@@ -507,7 +507,7 @@ mod tests {
         let input_dir = temp_dir.path().join("input");
         fs::create_dir(&input_dir).unwrap();
 
-        fs::write(input_dir.join("test.bin"), &[0u8; 16]).unwrap();
+        fs::write(input_dir.join("test.bin"), [0u8; 16]).unwrap();
 
         let manifest = WeightsManifest {
             format: "wg-weights-manifest".to_string(),

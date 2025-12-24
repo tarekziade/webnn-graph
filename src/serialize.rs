@@ -210,14 +210,14 @@ mod tests {
                 data_type: DataType::Float32,
                 shape: vec![1],
                 init: ConstInit::Scalar {
-                    value: serde_json::json!(3.14),
+                    value: serde_json::json!(3.5),
                 },
             },
         );
         g.outputs.insert("scale".to_string(), "scale".to_string());
 
         let text = serialize_graph_to_wg_text(&g).unwrap();
-        assert!(text.contains("scale: f32[1] @scalar(3.14);"));
+        assert!(text.contains("scale: f32[1] @scalar(3.5);"));
     }
 
     #[test]
@@ -384,7 +384,7 @@ webnn_graph "resnet_head" v1 {
 
         let mut options = serde_json::Map::new();
         options.insert("int_val".to_string(), serde_json::json!(42));
-        options.insert("float_val".to_string(), serde_json::json!(3.14));
+        options.insert("float_val".to_string(), serde_json::json!(3.5));
         options.insert("bool_val".to_string(), serde_json::json!(true));
         options.insert("null_val".to_string(), serde_json::json!(null));
         options.insert("array_val".to_string(), serde_json::json!([1, 2, 3]));
@@ -400,7 +400,7 @@ webnn_graph "resnet_head" v1 {
 
         let text = serialize_graph_to_wg_text(&g).unwrap();
         assert!(text.contains("int_val=42"));
-        assert!(text.contains("float_val=3.14"));
+        assert!(text.contains("float_val=3.5"));
         assert!(text.contains("bool_val=true"));
         assert!(text.contains("null_val=null"));
         assert!(text.contains("array_val=[1, 2, 3]"));
