@@ -3,6 +3,7 @@ name = "webnn-graph"
 version = "0.1.0"
 edition = "2021"
 license = "APL-2.0"
+description = "Simple DSL for WebNN graphs"
 
 [lib]
 name = "webnn_graph"
