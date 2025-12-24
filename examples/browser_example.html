@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebNN Graph Example - ResNet Head</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 10px 5px 10px 0;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 4px;
+            background: #e8f5e9;
+            border-left: 4px solid #4CAF50;
+        }
+        .error {
+            background: #ffebee;
+            border-left-color: #f44336;
+        }
+        .info {
+            background: #e3f2fd;
+            border-left-color: #2196F3;
+        }
+        pre {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        code {
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WebNN Graph Example - ResNet Head</h1>
+
+        <div class="info status">
+            <strong>Note:</strong> This example requires a browser with WebNN API support.
+            Run <code>build_example.sh</code> first to generate the required files.
+        </div>
+
+        <div id="status" class="status">
+            Ready to load graph and weights.
+        </div>
+
+        <button id="loadBtn" onclick="loadGraphAndWeights()">1. Load Graph & Weights</button>
+        <button id="runBtn" onclick="runInference()" disabled>2. Run Inference</button>
+
+        <h2>Results</h2>
+        <div id="results">
+            <p><em>Results will appear here after running inference.</em></p>
+        </div>
+
+        <h2>How It Works</h2>
+        <pre><code>// 1. Load weights from binary file
+const weights = await WeightsFile.load(
+    'resnet_head.weights',
+    'resnet_head.manifest.json'
+);
+
+// 2. Build the graph (one-time setup)
+const context = await navigator.ml.createContext();
+const graph = await buildGraph(context, weights);
+
+// 3. Run with different inputs (reusable!)
+const input = new Float32Array(2048).fill(0.1);
+const outputs = await context.compute(graph, { x: input });
+const probs = outputs.probs;</code></pre>
+    </div>
+
+    <script type="module">
+        import { WeightsFile, buildGraph } from './buildGraph.js';
+
+        let graph = null;
+        let context = null;
+
+        window.loadGraphAndWeights = async function() {
+            const statusDiv = document.getElementById('status');
+            const loadBtn = document.getElementById('loadBtn');
+            const runBtn = document.getElementById('runBtn');
+
+            try {
+                loadBtn.disabled = true;
+                statusDiv.className = 'status info';
+                statusDiv.textContent = 'Loading weights...';
+
+                // Check WebNN support
+                if (!('ml' in navigator)) {
+                    throw new Error('WebNN API not supported in this browser');
+                }
+
+                // Load weights
+                const weights = await WeightsFile.load(
+                    'resnet_head.weights',
+                    'resnet_head.manifest.json'
+                );
+                statusDiv.textContent = 'Weights loaded. Creating WebNN context...';
+
+                // Create context and build graph
+                context = await navigator.ml.createContext();
+                statusDiv.textContent = 'Building graph...';
+
+                graph = await buildGraph(context, weights);
+
+                statusDiv.className = 'status';
+                statusDiv.innerHTML = '<strong>✓ Success!</strong> Graph built and ready. ' +
+                    'The graph is now reusable for multiple inferences.';
+                runBtn.disabled = false;
+
+            } catch (error) {
+                statusDiv.className = 'status error';
+                statusDiv.innerHTML = '<strong>Error:</strong> ' + error.message;
+                console.error('Error loading graph:', error);
+                loadBtn.disabled = false;
+            }
+        };
+
+        window.runInference = async function() {
+            const statusDiv = document.getElementById('status');
+            const resultsDiv = document.getElementById('results');
+            const runBtn = document.getElementById('runBtn');
+
+            try {
+                runBtn.disabled = true;
+                statusDiv.className = 'status info';
+                statusDiv.textContent = 'Running inference...';
+
+                // Create sample input (batch_size=1, features=2048)
+                const input = new Float32Array(2048);
+                for (let i = 0; i < input.length; i++) {
+                    input[i] = Math.random() * 0.1; // Small random values
+                }
+
+                // Run inference (reusing the same graph!)
+                const startTime = performance.now();
+                const outputs = await context.compute(graph, { x: input });
+                const inferenceTime = (performance.now() - startTime).toFixed(2);
+
+                // Get results
+                const probs = outputs.probs;
+                const probsArray = await probs.read();
+
+                // Find top 5 predictions
+                const indexed = Array.from(probsArray).map((p, i) => ({idx: i, prob: p}));
+                indexed.sort((a, b) => b.prob - a.prob);
+                const top5 = indexed.slice(0, 5);
+
+                // Display results
+                resultsDiv.innerHTML = `
+                    <p><strong>Inference completed in ${inferenceTime}ms</strong></p>
+                    <p><strong>Top 5 predictions:</strong></p>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr style="background: #f5f5f5; font-weight: bold;">
+                            <td style="padding: 8px; border: 1px solid #ddd;">Class</td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">Probability</td>
+                        </tr>
+                        ${top5.map(item => `
+                            <tr>
+                                <td style="padding: 8px; border: 1px solid #ddd;">Class ${item.idx}</td>
+                                <td style="padding: 8px; border: 1px solid #ddd;">${(item.prob * 100).toFixed(2)}%</td>
+                            </tr>
+                        `).join('')}
+                    </table>
+                    <p><em>Note: These are example outputs with synthetic weights.</em></p>
+                `;
+
+                statusDiv.className = 'status';
+                statusDiv.innerHTML = '<strong>✓ Inference complete!</strong> ' +
+                    'You can run again with different inputs using the same graph.';
+
+            } catch (error) {
+                statusDiv.className = 'status error';
+                statusDiv.innerHTML = '<strong>Error:</strong> ' + error.message;
+                console.error('Error running inference:', error);
+            } finally {
+                runBtn.disabled = false;
+            }
+        };
+    </script>
+</body>
+</html>

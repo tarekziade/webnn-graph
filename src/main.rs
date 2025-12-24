@@ -2,10 +2,11 @@ use clap::{Parser, Subcommand};
 use std::fs;
 
 use webnn_graph::ast::GraphJson;
-use webnn_graph::emit_js::emit_builder_js;
+use webnn_graph::emit_js::{emit_builder_js, emit_weights_loader_js};
 use webnn_graph::parser::parse_wg_text;
 use webnn_graph::validate::{validate_graph, validate_weights};
 use webnn_graph::weights::WeightsManifest;
+use webnn_graph::weights_io::{create_manifest, pack_weights, unpack_weights};
 
 #[derive(Parser)]
 #[command(name = "webnn-graph")]
@@ -27,6 +28,30 @@ enum Command {
     },
     EmitJs {
         path: String,
+    },
+    PackWeights {
+        #[arg(long)]
+        manifest: String,
+        #[arg(long)]
+        input_dir: String,
+        #[arg(long)]
+        output: String,
+    },
+    UnpackWeights {
+        #[arg(long)]
+        weights: String,
+        #[arg(long)]
+        manifest: String,
+        #[arg(long)]
+        output_dir: String,
+    },
+    CreateManifest {
+        #[arg(long)]
+        input_dir: String,
+        #[arg(long)]
+        output: String,
+        #[arg(long, default_value = "little")]
+        endianness: String,
     },
 }
 
@@ -58,8 +83,35 @@ fn main() -> anyhow::Result<()> {
             let txt = fs::read_to_string(path)?;
             let g: GraphJson = serde_json::from_str(&txt)?;
             validate_graph(&g)?;
+
+            // Emit WeightsFile helper class
+            print!("{}", emit_weights_loader_js());
+            println!();
+
+            // Emit buildGraph function
             let js = emit_builder_js(&g);
             print!("{js}");
+        }
+        Command::PackWeights {
+            manifest,
+            input_dir,
+            output,
+        } => {
+            pack_weights(&manifest, &input_dir, &output)?;
+        }
+        Command::UnpackWeights {
+            weights,
+            manifest,
+            output_dir,
+        } => {
+            unpack_weights(&weights, &manifest, &output_dir)?;
+        }
+        Command::CreateManifest {
+            input_dir,
+            output,
+            endianness,
+        } => {
+            create_manifest(&input_dir, &output, &endianness)?;
         }
     }
 

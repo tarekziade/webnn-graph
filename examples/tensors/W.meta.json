@@ -1,0 +1,10 @@
+{
+  "dataType": "float32",
+  "shape": [
+    2048,
+    1000
+  ],
+  "byteOffset": 8,
+  "byteLength": 8192000,
+  "layout": "row-major"
+}

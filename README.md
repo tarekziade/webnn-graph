@@ -43,41 +43,6 @@ Then:
 webnn-graph --help
 ```
 
-## Development
-
-### Building and Testing
-
-Build the project:
-```bash
-make build
-```
-
-Run tests:
-```bash
-make test
-```
-
-Format code:
-```bash
-make fmt
-```
-
-Run linter:
-```bash
-make lint
-```
-
-Clean build artifacts:
-```bash
-make clean
-```
-
-View all available commands:
-```bash
-make help
-```
-
-
 ## Formats
 
 ### Text format: .webnn
@@ -92,7 +57,7 @@ The text format is block-based and declarative:
 Types are written as dtype[dim0, dim1, ...] where dtype is one of:
 f32, f16, i32, u32, i64, u64, i8, u8.
 
-### JSON format
+### JSON format: .json
 
 The JSON format is canonical (stable for tooling, easy to diff). The text format is sugar over JSON.
 
@@ -125,7 +90,7 @@ webnn_graph "resnet_head" v1 {
 ### JSON (examples/resnet_head.json)
 
 
-```jspn
+```json
 {
   "format": "webnn-graph-json",
   "version": 1,
@@ -184,6 +149,8 @@ If you use @weights("key") in .webnn, you can validate the mapping using a manif
 
 ## CLI
 
+### Graph Operations
+
 Parse graph text (.webnn) to JSON:
 
 ```bash
@@ -206,7 +173,7 @@ make validate
 webnn-graph validate graph.json --weights-manifest examples/weights.manifest.json
 ```
 
-Emit WebNN JS builder code:
+Emit WebNN JS builder code (includes WeightsFile helper):
 
 ```bash
 make emit-js
@@ -214,12 +181,123 @@ make emit-js
 webnn-graph emit-js graph.json > buildGraph.js
 ```
 
-## Output JS expectations
+### Weights Management
 
-The generated JS expects a weights helper with:
+Pack tensor files into binary .weights file:
 
-- weights.buffer (an ArrayBuffer containing concatenated tensor bytes)
-- weights.getSlice(key) returning { byteOffset, byteLength }
+```bash
+webnn-graph pack-weights \
+  --manifest weights.manifest.json \
+  --input-dir ./tensors/ \
+  --output model.weights
+```
+
+Unpack binary weights for inspection:
+
+```bash
+webnn-graph unpack-weights \
+  --weights model.weights \
+  --manifest weights.manifest.json \
+  --output-dir ./extracted/
+```
+
+Create manifest from tensor directory:
+
+```bash
+webnn-graph create-manifest \
+  --input-dir ./tensors/ \
+  --output weights.manifest.json \
+  --endianness little
+```
+
+## Complete Workflow
+
+The DSL enables **complete separation of concerns**: graph structure is reusable, weights are external, and input data is provided at runtime.
+
+### 1. Define Graph (Data-Agnostic Template)
+
+Your `.webnn` file contains only structure - no actual data:
+
+```webnn
+webnn_graph "resnet_head" v1 {
+  inputs {
+    x: f32[1, 2048];  // Shape only, no data!
+  }
+  consts {
+    W: f32[2048, 1000] @weights("W");  // Reference to external weights
+    b: f32[1000]       @weights("b");
+  }
+  nodes {
+    logits0 = matmul(x, W);
+    logits  = add(logits0, b);
+    probs   = softmax(logits, axis=1);
+  }
+  outputs { probs; }
+}
+```
+
+### 2. Pack Weights
+
+Combine your trained model weights into a binary file:
+
+```bash
+webnn-graph pack-weights \
+  --manifest weights.manifest.json \
+  --input-dir ./trained_weights/ \
+  --output model.weights
+```
+
+### 3. Generate Runtime Code
+
+Build the JavaScript module:
+
+```bash
+webnn-graph parse model.webnn | \
+  webnn-graph emit-js /dev/stdin > buildGraph.js
+```
+
+This generates:
+- `WeightsFile` class for loading and validating weights
+- `buildGraph()` function to construct the WebNN graph
+
+### 4. Use in Browser/Node.js
+
+Reuse the same graph with different input data:
+
+```javascript
+import { WeightsFile, buildGraph } from './buildGraph.js';
+
+// One-time setup
+const weights = await WeightsFile.load('model.weights', 'weights.manifest.json');
+const context = await navigator.ml.createContext();
+const graph = await buildGraph(context, weights);
+
+// Reuse with different inputs (no rebuilding!)
+const input1 = new Float32Array(2048).fill(1.0);
+const result1 = await context.compute(graph, { x: input1 });
+
+const input2 = new Float32Array(2048).fill(2.0);
+const result2 = await context.compute(graph, { x: input2 });
+```
+
+## Binary Weights Format
+
+The `.weights` file uses a simple binary format:
+
+```
+┌─────────────────────────────────────┐
+│ Magic: "WGWT" (4 bytes)            │
+├─────────────────────────────────────┤
+│ Version: 1 (4 bytes, little-endian)│
+├─────────────────────────────────────┤
+│ Tensor data (concatenated)          │
+│ - Tensor 1: bytes at offset         │
+│ - Tensor 2: bytes at offset         │
+│ ...                                  │
+└─────────────────────────────────────┘
+```
+
+The `.manifest.json` describes where each tensor lives in the binary file.
 
 ## Notes
 

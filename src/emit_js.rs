@@ -13,8 +13,103 @@ fn dt_to_js(dt: &DataType) -> &'static str {
     }
 }
 
+/// Emit the WeightsFile helper class for loading weights
+pub fn emit_weights_loader_js() -> &'static str {
+    r#"/**
+ * Helper class for loading and managing WebNN graph weights
+ */
+export class WeightsFile {
+  constructor(buffer, manifest) {
+    this.buffer = buffer;
+    this.manifest = manifest;
+  }
+
+  /**
+   * Load weights from URL paths
+   * @param {string} weightsPath - Path to .weights binary file
+   * @param {string} manifestPath - Path to .manifest.json file
+   * @returns {Promise<WeightsFile>}
+   */
+  static async load(weightsPath, manifestPath) {
+    const [weightsResponse, manifestResponse] = await Promise.all([
+      fetch(weightsPath),
+      fetch(manifestPath)
+    ]);
+
+    if (!weightsResponse.ok) {
+      throw new Error(`Failed to load weights: ${weightsResponse.statusText}`);
+    }
+    if (!manifestResponse.ok) {
+      throw new Error(`Failed to load manifest: ${manifestResponse.statusText}`);
+    }
+
+    const buffer = await weightsResponse.arrayBuffer();
+    const manifest = await manifestResponse.json();
+
+    // Validate manifest format
+    if (manifest.format !== 'wg-weights-manifest') {
+      throw new Error(`Invalid manifest format: ${manifest.format}`);
+    }
+    if (manifest.version !== 1) {
+      throw new Error(`Unsupported manifest version: ${manifest.version}`);
+    }
+
+    // Validate weights file header
+    const view = new DataView(buffer);
+    const magic = new TextDecoder().decode(new Uint8Array(buffer, 0, 4));
+    if (magic !== 'WGWT') {
+      throw new Error(`Invalid weights file magic: ${magic}`);
+    }
+    const version = view.getUint32(4, true); // little-endian
+    if (version !== 1) {
+      throw new Error(`Unsupported weights file version: ${version}`);
+    }
+
+    return new WeightsFile(buffer, manifest);
+  }
+
+  /**
+   * Get a slice descriptor for a named tensor
+   * @param {string} name - Tensor name
+   * @returns {Object} Tensor metadata with byteOffset and byteLength
+   */
+  getSlice(name) {
+    const tensor = this.manifest.tensors[name];
+    if (!tensor) {
+      throw new Error(`Tensor not found in manifest: ${name}`);
+    }
+    return tensor;
+  }
+
+  /**
+   * Get the raw data for a named tensor
+   * @param {string} name - Tensor name
+   * @returns {ArrayBuffer} Tensor data
+   */
+  getData(name) {
+    const tensor = this.getSlice(name);
+    return this.buffer.slice(tensor.byteOffset, tensor.byteOffset + tensor.byteLength);
+  }
+
+  /**
+   * List all available tensor names
+   * @returns {string[]}
+   */
+  getTensorNames() {
+    return Object.keys(this.manifest.tensors);
+  }
+}
+"#
+}
+
 pub fn emit_builder_js(g: &GraphJson) -> String {
     let mut s = String::new();
+    s.push_str("/**\n");
+    s.push_str(" * Build a WebNN MLGraph from the graph definition\n");
+    s.push_str(" * @param {MLContext} context - WebNN context\n");
+    s.push_str(" * @param {WeightsFile} weights - Loaded weights file\n");
+    s.push_str(" * @returns {Promise<MLGraph>}\n");
+    s.push_str(" */\n");
     s.push_str("export async function buildGraph(context, weights) {\n");
     s.push_str("  const builder = new MLGraphBuilder(context);\n");
     s.push_str("  const env = new Map();\n\n");
