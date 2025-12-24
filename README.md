@@ -31,67 +31,55 @@ This file is intended to be:
 Its EBNF-like grammar:
 
 ```
-document      = ws, graph_decl, ws ;
+File         ::= Header Block* EOF
 
-graph_decl    = "webnn_graph", ws, string, ws, version, ws, "{",
-                ws, section*, ws, "}", ws ;
+Header       ::= "webnn_graph" String "v" Int "{"
 
-version       = "v", int ;
+Block        ::= InputsBlock
+               | ConstsBlock
+               | NodesBlock
+               | OutputsBlock
+               | "}"              (* closes the graph *)
 
-section       = inputs_section
-              | consts_section
-              | nodes_section
-              | outputs_section ;
+InputsBlock  ::= "inputs"  "{" InputDecl*  "}"
+ConstsBlock  ::= "consts"  "{" ConstDecl*  "}"
+NodesBlock   ::= "nodes"   "{" Stmt*       "}"
+OutputsBlock ::= "outputs" "{" OutputItem* "}"
 
-inputs_section  = "inputs", ws, "{", ws, input_decl*, ws, "}", ws ;
-consts_section  = "consts", ws, "{", ws, const_decl*, ws, "}", ws ;
-nodes_section   = "nodes",  ws, "{", ws, node_stmt*,  ws, "}", ws ;
-outputs_section = "outputs", ws, "{", ws, output_list, ws, "}", ws ;
+InputDecl    ::= Ident ":" Type ";"
+ConstDecl    ::= Ident ":" Type ConstAnnot* ";"
 
-input_decl    = ident, ws, ":", ws, tensor_type, ws, ";", ws ;
+OutputItem   ::= Ident ("," Ident)* ";"?    (* optional semicolon *)
 
-const_decl    = ident, ws, ":", ws, tensor_type, ws, init?, ws, ";", ws ;
+Stmt         ::= (MultiAssign | Assign) ";"
+Assign       ::= Ident "=" Expr
+MultiAssign  ::= "[" Ident ("," Ident)* "]" "=" Expr
 
-init          = ws, "@weights", ws, "(", ws, string, ws, ")" ;
+Expr         ::= Call | Ident | Literal
+Call         ::= Ident "(" Args? ")"
 
-node_stmt     = ident, ws, "=", ws, call, ws, ";", ws ;
+Args         ::= Arg ("," Arg)*
+Arg          ::= Ident "=" Value | Value
 
-call          = ident, ws, "(", ws, arg_list?, ws, ")", ws ;
+Value        ::= Literal | Ident
 
-arg_list      = expr, (ws, ",", ws, expr)*, (ws, ",")? ;
+Literal      ::= Array | String | Number | Boolean | Null
+Array        ::= "[" (Value ("," Value)*)? "]"
 
-expr          = ident
-              | number
-              | string
-              | list
-              | named_arg ;
+Boolean      ::= "true" | "false"
+Null         ::= "null"
 
-named_arg     = ident, ws, "=", ws, expr ;
+Type         ::= DType Shape
+DType        ::= "f32" | "f16" | "i32" | "u32" | "i64" | "u64" | "i8" | "u8"
+Shape        ::= "[" (Int ("," Int)*)? "]"
 
-list          = "[", ws, (expr, (ws, ",", ws, expr)*)?, ws, "]" ;
+ConstAnnot   ::= "@weights" "(" String ")"
+               | "@scalar"  "(" Number ")"
 
-output_list   = ident, ws, ";", ws, (ident, ws, ";", ws)* ;
-
-tensor_type   = dtype, ws, "[", ws, dims?, ws, "]" ;
-
-dims          = dim, (ws, ",", ws, dim)* ;
-
-dim           = int ;        (* or ident for symbolic dims if you support that *)
-
-dtype         = "f32" | "f16"
-              | "i32" | "u32"
-              | "i64" | "u64"
-              | "i8"  | "u8" ;
-
-ident         = (alpha | "_"), (alnum | "_" )* ;
-string        = "\"", { char - "\"" }, "\"" ;
-number        = int | float ;
-
-int           = digit, digit* ;
-float         = digit, digit*, ".", digit, digit* ;
-
-ws            = { " " | "\t" | "\r" | "\n" | comment } ;
-comment       = ("#" | "//"), { char - "\n" }, ("\n" | eof) ;
+Ident        ::= (ALPHA | "_") (ALNUM | "_")*
+Int          ::= DIGIT+
+Number       ::= "-"? DIGIT+ ("." DIGIT+)? (("e"|"E") ("+"|"-")? DIGIT+)? 
+String       ::= "\"" ( "\\\"" | "\\\\" | (ANY-but-quote) )* "\""
 ```
 
 ### 2. Weights manifest (`.manifest.json`, optional)
