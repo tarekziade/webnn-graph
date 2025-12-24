@@ -13,12 +13,20 @@ struct WGParser;
 #[derive(Debug, Error)]
 pub enum ParseError {
     #[error("parse error: {0}")]
-    Pest(#[from] pest::error::Error<Rule>),
+    Pest(Box<pest::error::Error<Rule>>),
     #[error("invalid dtype: {0}")]
     BadDType(String),
     #[error("internal error: {0}")]
     Internal(String),
 }
+
+impl From<pest::error::Error<Rule>> for ParseError {
+    fn from(err: pest::error::Error<Rule>) -> Self {
+        ParseError::Pest(Box::new(err))
+    }
+}
+
+type ParsedExpr = (String, Vec<String>, Map<String, Value>, Option<Vec<String>>);
 
 pub fn parse_wg_text(input: &str) -> Result<GraphJson, ParseError> {
     let mut pairs = WGParser::parse(Rule::file, input)?;
@@ -172,9 +180,7 @@ fn parse_multi_assign(p: Pair<Rule>) -> Result<Node, ParseError> {
     })
 }
 
-fn parse_expr(
-    p: Pair<Rule>,
-) -> Result<(String, Vec<String>, Map<String, Value>, Option<Vec<String>>), ParseError> {
+fn parse_expr(p: Pair<Rule>) -> Result<ParsedExpr, ParseError> {
     match p.as_rule() {
         Rule::expr => parse_expr(p.into_inner().next().unwrap()),
         Rule::call => parse_call(p),
@@ -191,9 +197,7 @@ fn parse_expr(
     }
 }
 
-fn parse_call(
-    p: Pair<Rule>,
-) -> Result<(String, Vec<String>, Map<String, Value>, Option<Vec<String>>), ParseError> {
+fn parse_call(p: Pair<Rule>) -> Result<ParsedExpr, ParseError> {
     let mut it = p.into_inner();
     let op = it.next().unwrap().as_str().to_string();
     let mut inputs: Vec<String> = Vec::new();

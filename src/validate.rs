@@ -29,7 +29,11 @@ pub enum ValidateError {
     WeightMismatch { ref_: String },
 
     #[error("weights byteLength mismatch for '{ref_}': expected {expected} got {got}")]
-    WeightByteLengthMismatch { ref_: String, expected: u64, got: u64 },
+    WeightByteLengthMismatch {
+        ref_: String,
+        expected: u64,
+        got: u64,
+    },
 }
 
 pub fn validate_graph(g: &GraphJson) -> Result<(), ValidateError> {
@@ -77,7 +81,7 @@ pub fn validate_graph(g: &GraphJson) -> Result<(), ValidateError> {
 }
 
 pub fn validate_weights(g: &GraphJson, m: &WeightsManifest) -> Result<(), ValidateError> {
-    for (_name, c) in &g.consts {
+    for c in g.consts.values() {
         if let ConstInit::Weights { r#ref } = &c.init {
             let entry = m
                 .tensors
@@ -85,7 +89,9 @@ pub fn validate_weights(g: &GraphJson, m: &WeightsManifest) -> Result<(), Valida
                 .ok_or_else(|| ValidateError::MissingWeight(r#ref.clone()))?;
 
             if entry.data_type != c.data_type || entry.shape != c.shape {
-                return Err(ValidateError::WeightMismatch { ref_: r#ref.clone() });
+                return Err(ValidateError::WeightMismatch {
+                    ref_: r#ref.clone(),
+                });
             }
 
             let expected = dtype_size(&c.data_type) * numel(&c.shape);
@@ -210,7 +216,8 @@ mod tests {
                 shape: vec![1],
             },
         );
-        g.outputs.insert("out".to_string(), "nonexistent".to_string());
+        g.outputs
+            .insert("out".to_string(), "nonexistent".to_string());
 
         let result = validate_graph(&g);
         assert!(matches!(result, Err(ValidateError::BadOutputRef { .. })));

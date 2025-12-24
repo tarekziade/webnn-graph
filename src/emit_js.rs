@@ -20,11 +20,12 @@ pub fn emit_builder_js(g: &GraphJson) -> String {
     s.push_str("  const env = new Map();\n\n");
 
     for (name, d) in &g.inputs {
+        let shape = format!("{:?}", d.shape);
         s.push_str(&format!(
             "  env.set({name:?}, builder.input({name:?}, {{ dataType: {dt:?}, shape: {shape} }}));\n",
             name = name,
             dt = dt_to_js(&d.data_type),
-            shape = format!("{:?}", d.shape),
+            shape = shape,
         ));
     }
     s.push('\n');
@@ -32,12 +33,13 @@ pub fn emit_builder_js(g: &GraphJson) -> String {
     for (name, c) in &g.consts {
         match &c.init {
             crate::ast::ConstInit::Weights { r#ref } => {
+                let shape = format!("{:?}", c.shape);
                 s.push_str(&format!(
 "  {{\n    const sl = weights.getSlice({r:?});\n    const buf = weights.buffer.slice(sl.byteOffset, sl.byteOffset + sl.byteLength);\n    env.set({name:?}, builder.constant({{ dataType: {dt:?}, shape: {shape} }}, buf));\n  }}\n",
                     r = r#ref,
                     name = name,
                     dt = dt_to_js(&c.data_type),
-                    shape = format!("{:?}", c.shape),
+                    shape = shape,
                 ));
             }
             crate::ast::ConstInit::Scalar { value } => {
@@ -49,11 +51,12 @@ pub fn emit_builder_js(g: &GraphJson) -> String {
                 ));
             }
             crate::ast::ConstInit::InlineBytes { bytes } => {
+                let shape = format!("{:?}", c.shape);
                 s.push_str(&format!(
                     "  env.set({name:?}, builder.constant({{ dataType: {dt:?}, shape: {shape} }}, new Uint8Array({bytes:?}).buffer));\n",
                     name = name,
                     dt = dt_to_js(&c.data_type),
-                    shape = format!("{:?}", c.shape),
+                    shape = shape,
                     bytes = bytes
                 ));
             }
@@ -62,28 +65,42 @@ pub fn emit_builder_js(g: &GraphJson) -> String {
     s.push('\n');
 
     for n in &g.nodes {
-        let ins = n.inputs.iter().map(|x| format!("env.get({:?})", x)).collect::<Vec<_>>().join(", ");
+        let ins = n
+            .inputs
+            .iter()
+            .map(|x| format!("env.get({:?})", x))
+            .collect::<Vec<_>>()
+            .join(", ");
         let opts = serde_json::Value::Object(n.options.clone()).to_string();
         if let Some(outs) = &n.outputs {
             s.push_str(&format!(
                 "  {{\n    const tmp = builder[{op:?}]({ins}, {opts});\n",
-                op = n.op, ins = ins, opts = opts
+                op = n.op,
+                ins = ins,
+                opts = opts
             ));
             for (i, o) in outs.iter().enumerate() {
-                s.push_str(&format!("    env.set({o:?}, tmp[{i}]);\n", o=o, i=i));
+                s.push_str(&format!("    env.set({o:?}, tmp[{i}]);\n", o = o, i = i));
             }
             s.push_str("  }\n");
         } else {
             s.push_str(&format!(
                 "  env.set({id:?}, builder[{op:?}]({ins}, {opts}));\n",
-                id = n.id, op = n.op, ins = ins, opts = opts
+                id = n.id,
+                op = n.op,
+                ins = ins,
+                opts = opts
             ));
         }
     }
 
     s.push_str("\n  const outputs = {};\n");
     for (out, r) in &g.outputs {
-        s.push_str(&format!("  outputs[{out:?}] = env.get({r:?});\n", out=out, r=r));
+        s.push_str(&format!(
+            "  outputs[{out:?}] = env.get({r:?});\n",
+            out = out,
+            r = r
+        ));
     }
     s.push_str("  return await builder.build(outputs);\n");
     s.push_str("}\n");

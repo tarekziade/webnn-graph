@@ -38,7 +38,9 @@ pub fn dtype_size(dt: &DataType) -> u64 {
 }
 
 pub fn numel(shape: &[u32]) -> u64 {
-    shape.iter().fold(1u64, |acc, &d| acc.saturating_mul(d as u64))
+    shape
+        .iter()
+        .fold(1u64, |acc, &d| acc.saturating_mul(d as u64))
 }
 
 #[cfg(test)]
