@@ -1,73 +1,155 @@
 # webnn-graph
 
-Rust implementation for a WebNN-oriented graph DSL:
+`webnn-graph` is a small Rust library and CLI that defines a **WebNN-oriented
+graph DSL**, parses it into a minimal AST, and enables multiple downstream uses
+such as graph validation, serialization, and WebNN graph construction.
 
-- Parse WebNN graph text (`.webnn`) to canonical JSON
-- Serialize JSON back to WebNN text format (full round-trip support)
-- Validate structure plus optional weights manifest
-- Emit WebNN JavaScript builder code (WebNN MLGraphBuilder calls)
+The goal is to keep the language surface **very close to WebNN itself**, while
+allowing graphs to be expressed declaratively and reused across tooling.
 
-This is meant to be a small, hackable reference scaffold: keep the language
-surface close to WebNN, but express graphs declaratively.
+## Conceptual Model
+
+A WebNN graph defined with this project is split across **three distinct files**, each with a single responsibility.
+
+### 1. Graph definition (`.webnn`)
+
+The `.webnn` file describes **only the structure of the graph**:
+
+- Inputs and their types
+- Constants and their shapes
+- Operator calls and their wiring
+- Named outputs
+
+It contains **no actual tensor data**.
+
+This file is intended to be:
+- Small
+- Human-readable
+- Easy to diff and review
+- Stable across weight updates
+
+### 2. Weights manifest (`.manifest.json`, optional)
+
+If the graph references external weights using `@weights("key")`, a manifest file can be provided to:
+
+- Describe tensor shapes and data types
+- Define offsets and sizes inside a binary weights file
+- Validate that referenced weights are well-formed
+
+The manifest is metadata only. It does not contain raw tensor bytes.
+
+### 3. Binary weights file (`.weights`, optional)
+
+The `.weights` file is a simple concatenation of raw tensor data.
+
+It is:
+- Compact
+- Fast to load
+- Independent from graph structure
+
+This separation allows the same graph definition to be reused with different trained weights.
+
+
+## Core Idea
+
+The library parses the `.webnn` DSL into a **very small, intentionally simple AST**:
+
+- Inputs
+- Constants
+- Nodes (operator name, inputs, options)
+- Outputs
+
+This AST is the **true internal representation** of a graph.
+
+Once parsed, the AST can be:
+- Validated
+- Serialized
+- Transformed
+- Used to construct a WebNN graph
+
+### Using the AST
+
+The AST is designed to be easy to consume from other tools. In particular, it can be used to:
+
+- Build a WebNN graph using **rustnn**
+- Build a WebNN graph using **PyWebNN**
+- Generate WebNN JavaScript `MLGraphBuilder` calls
+- Perform lightweight graph analysis or transformations
+
+The library does not attempt to deeply re-specify WebNN semantics. Anything not explicitly checked is passed through and left to the WebNN runtime to validate.
+
+---
+
+## JSON Serialization (Secondary)
+
+In addition to the text DSL, the AST can be serialized to a **canonical JSON format**.
+
+Important points:
+
+- JSON is **not** the primary authoring format
+- It exists as a convenience for programmatic manipulation
+- It supports full round-trip conversion back to `.webnn`
+- It can store optional metadata such as the graph name
+
+The JSON format is roughly **10x larger** than the `.webnn` DSL and is best suited for tooling, not manual editing.
+
+All CLI commands auto-detect and accept both formats.
+
+
+## Features
+
+- Parse WebNN graph text (`.webnn`) into a simple AST
+- Serialize the AST to canonical JSON
+- Serialize JSON back to `.webnn` with full round-trip support
+- Validate graph structure and optional weights manifest
+- Emit WebNN JavaScript builder code (`MLGraphBuilder` calls)
+- Pack and unpack binary weight files
+
+This is intended as a **small, hackable reference scaffold**, not a heavy framework.
 
 ## Install
 
 ### From source (local dev)
 
-Clone and build:
-
 ```bash
 git clone https://github.com/tarekziade/webnn-graph
 cd webnn-graph
 make build
-```
-
-Then run the CLI:
-
-```bash
 make run
-# Or for help:
+# Or:
 webnn-graph --help
 ```
 
 ### Install the CLI with Cargo
 
-From the repo root:
-
 ```bash
-cargo install --path .
-```
-
-Then:
-
-```bash
-webnn-graph --help
+cargo install webnn-graph
 ```
 
 ## Formats
 
 ### Text format: .webnn
 
-The text format is block-based and declarative:
+The DSL is block-based and declarative:
 
 - inputs {} declares typed inputs
-- consts {} declares typed constants (usually weights)
+- consts {} declares typed constants
 - nodes {} lists operator calls in order
-- outputs {} declares the named graph outputs
-
-Types are written as dtype[dim0, dim1, ...] where dtype is one of:
-f32, f16, i32, u32, i64, u64, i8, u8.
-
-### JSON format: .json
-
-The JSON format is **10x larger** than .webnn but useful for programmatic manipulation. All CLI commands auto-detect and accept both formats. Use JSON when you need to manipulate graphs programmatically in other tools/languages. The JSON format optionally stores the graph name and supports full round-trip conversion back to .webnn.
-
-## Small example
-
-### Text (examples/resnet_head.webnn)
+- outputs {} declares named graph outputs
 
 
+Types use:
 ```
+dtype[dim0, dim1, ...]
+```
+
+Supported dtypes: `f32`, `f16`, `i32`, `u32`,`i64`, `u64`, `i8`, `u8`.
+
+## Example
+
+### Text 
+
+```webnn
 webnn_graph "resnet_head" v1 {
   inputs {
     x: f32[1, 2048];
@@ -88,8 +170,7 @@ webnn_graph "resnet_head" v1 {
 }
 ```
 
-### JSON (examples/resnet_head.json)
-
+### JSON
 
 ```json
 {
@@ -119,200 +200,9 @@ webnn_graph "resnet_head" v1 {
 }
 ```
 
-## Weights manifest (optional)
+# Notes
 
-If you use @weights("key") in .webnn, you can validate the mapping using a manifest such as examples/weights.manifest.json:
-
-```json
-{
-  "format": "wg-weights-manifest",
-  "version": 1,
-  "endianness": "little",
-  "tensors": {
-    "W": {
-      "dataType": "float32",
-      "shape": [2048, 1000],
-      "byteOffset": 0,
-      "byteLength": 8192000,
-      "layout": "row-major"
-    },
-    "b": {
-      "dataType": "float32",
-      "shape": [1000],
-      "byteOffset": 8192000,
-      "byteLength": 4000,
-      "layout": "row-major"
-    }
-  }
-}
-
-```
-
-## CLI
-
-**All commands accept both .webnn and .json formats** (auto-detected). **.webnn is the primary format** (10x smaller than JSON).
-
-### Graph Operations
-
-Validate graph structure:
-
-```bash
-make validate
-# Or directly:
-webnn-graph validate examples/resnet_head.webnn
-webnn-graph validate model.webnn --weights-manifest weights.manifest.json
-```
-
-Emit WebNN JS builder code:
-
-```bash
-make emit-js
-# Or directly:
-webnn-graph emit-js examples/resnet_head.webnn > buildGraph.js
-```
-
-### Format Conversions (Optional)
-
-Parse .webnn to JSON (for programmatic manipulation):
-
-```bash
-webnn-graph parse examples/resnet_head.webnn > graph.json
-```
-
-Serialize JSON back to .webnn (for human editing):
-
-```bash
-webnn-graph serialize graph.json > model.webnn
-
-# Complete round-trip:
-webnn-graph parse model.webnn | webnn-graph serialize /dev/stdin > model_copy.webnn
-```
-
-### Weights Management
-
-Pack tensor files into binary .weights file:
-
-```bash
-webnn-graph pack-weights \
-  --manifest weights.manifest.json \
-  --input-dir ./tensors/ \
-  --output model.weights
-```
-
-Unpack binary weights for inspection:
-
-```bash
-webnn-graph unpack-weights \
-  --weights model.weights \
-  --manifest weights.manifest.json \
-  --output-dir ./extracted/
-```
-
-Create manifest from tensor directory:
-
-```bash
-webnn-graph create-manifest \
-  --input-dir ./tensors/ \
-  --output weights.manifest.json \
-  --endianness little
-```
-
-## Complete Workflow
-
-The DSL enables **complete separation of concerns**: graph structure is reusable, weights are external, and input data is provided at runtime.
-
-### 1. Define Graph (Data-Agnostic Template)
-
-Your `.webnn` file contains only structure - no actual data:
-
-```webnn
-webnn_graph "resnet_head" v1 {
-  inputs {
-    x: f32[1, 2048];  // Shape only, no data!
-  }
-  consts {
-    W: f32[2048, 1000] @weights("W");  // Reference to external weights
-    b: f32[1000]       @weights("b");
-  }
-  nodes {
-    logits0 = matmul(x, W);
-    logits  = add(logits0, b);
-    probs   = softmax(logits, axis=1);
-  }
-  outputs { probs; }
-}
-```
-
-### 2. Pack Weights
-
-Combine your trained model weights into a binary file:
-
-```bash
-webnn-graph pack-weights \
-  --manifest weights.manifest.json \
-  --input-dir ./trained_weights/ \
-  --output model.weights
-```
-
-### 3. Generate Runtime Code
-
-Build the JavaScript module:
-
-```bash
-webnn-graph parse model.webnn | \
-  webnn-graph emit-js /dev/stdin > buildGraph.js
-```
-
-This generates:
-- `WeightsFile` class for loading and validating weights
-- `buildGraph()` function to construct the WebNN graph
-
-### 4. Use in Browser/Node.js
-
-Reuse the same graph with different input data:
-
-```javascript
-import { WeightsFile, buildGraph } from './buildGraph.js';
-
-// One-time setup
-const weights = await WeightsFile.load('model.weights', 'weights.manifest.json');
-const context = await navigator.ml.createContext();
-const graph = await buildGraph(context, weights);
-
-// Reuse with different inputs (no rebuilding!)
-const input1 = new Float32Array(2048).fill(1.0);
-const result1 = await context.compute(graph, { x: input1 });
-
-const input2 = new Float32Array(2048).fill(2.0);
-const result2 = await context.compute(graph, { x: input2 });
-```
-
-## Binary Weights Format
-
-The `.weights` file uses a simple binary format:
-
-```
-┌─────────────────────────────────────┐
-│ Magic: "WGWT" (4 bytes)            │
-├─────────────────────────────────────┤
-│ Version: 1 (4 bytes, little-endian)│
-├─────────────────────────────────────┤
-│ Tensor data (concatenated)          │
-│ - Tensor 1: bytes at offset         │
-│ - Tensor 2: bytes at offset         │
-│ ...                                  │
-└─────────────────────────────────────┘
-```
-
-The `.manifest.json` describes where each tensor lives in the binary file.
-
-## Notes
-
-- The parser and validator are intentionally lightweight and geared toward fast iteration.
-- Operator semantics are not deeply validated yet (beyond basic structural checks).
-- Extending support is straightforward: add option checks in validation or keep it pass-through and let WebNN runtime validation handle it.
-
-## License
-
-APLv2
-
+- Validation is intentionally lightweight and structural.
+- Operator semantics are mostly pass-through.
+- The design favors simplicity and reuse over completeness.
+- The AST is stable and meant to be consumed by other WebNN tooling.
