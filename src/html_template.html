@@ -307,11 +307,87 @@
       background: #3a3a3a;
       color: #e0e0e0;
     }
+
+    #drop-zone {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 123, 255, 0.1);
+      border: 4px dashed #007bff;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    #drop-zone.active {
+      display: flex;
+    }
+
+    #drop-zone-content {
+      background: white;
+      padding: 40px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      text-align: center;
+    }
+
+    body.dark-mode #drop-zone-content {
+      background: #2d2d2d;
+    }
+
+    #drop-zone h2 {
+      margin-bottom: 12px;
+      font-size: 24px;
+    }
+
+    #drop-zone p {
+      color: #666;
+      font-size: 16px;
+    }
+
+    body.dark-mode #drop-zone p {
+      color: #999;
+    }
+
+    #file-input-label {
+      background: #28a745;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: background 0.2s;
+      display: inline-block;
+    }
+
+    #file-input-label:hover {
+      background: #218838;
+    }
+
+    #file-input {
+      display: none;
+    }
   </style>
 </head>
 <body>
+  <div id="drop-zone">
+    <div id="drop-zone-content">
+      <h2>📁 Drop WebNN Graph File</h2>
+      <p>Drop a .webnn or .json file here</p>
+    </div>
+  </div>
+
   <div id="toolbar">
     <h1>WebNN Graph Visualizer</h1>
+    <label id="file-input-label" for="file-input" title="Load graph file">
+      📂 Load File
+    </label>
+    <input type="file" id="file-input" accept=".webnn,.json" />
     <button id="fit-btn" title="Fit graph to screen">Fit to Screen</button>
     <button id="export-svg-btn" title="Export as SVG">Export SVG</button>
     <button id="export-png-btn" title="Export as PNG">Export PNG</button>
@@ -342,6 +418,226 @@
   <script>
     // Embedded graph data (replaced by Rust)
     const GRAPH_DATA = {{GRAPH_DATA}};
+
+    // ============================================================================
+    // WebNN Text Format Parser
+    // ============================================================================
+    function parseWebNNText(text) {
+      // Simple .webnn text format parser
+      const graph = {
+        format: 'webnn-graph-json',
+        version: 1,
+        name: null,
+        inputs: {},
+        consts: {},
+        nodes: [],
+        outputs: {}
+      };
+
+      // Extract graph name
+      const nameMatch = text.match(/webnn_graph\s+"([^"]+)"/);
+      if (nameMatch) {
+        graph.name = nameMatch[1];
+      }
+
+      // Parse inputs block
+      const inputsMatch = text.match(/inputs\s*{([^}]*)}/);
+      if (inputsMatch) {
+        const inputLines = inputsMatch[1].split(';').filter(l => l.trim());
+        for (const line of inputLines) {
+          const match = line.match(/(\w+)\s*:\s*(\w+)\[([^\]]+)\]/);
+          if (match) {
+            const [, name, dtype, shape] = match;
+            graph.inputs[name] = {
+              dataType: dtype.replace('f32', 'float32').replace('f16', 'float16')
+                .replace('i32', 'int32').replace('u32', 'uint32')
+                .replace('i64', 'int64').replace('u64', 'uint64')
+                .replace('i8', 'int8').replace('u8', 'uint8'),
+              shape: shape.split(',').map(s => parseInt(s.trim()))
+            };
+          }
+        }
+      }
+
+      // Parse consts block
+      const constsMatch = text.match(/consts\s*{([^}]*)}/);
+      if (constsMatch) {
+        const constLines = constsMatch[1].split(';').filter(l => l.trim());
+        for (const line of constLines) {
+          // Match weights reference
+          let match = line.match(/(\w+)\s*:\s*(\w+)\[([^\]]+)\]\s*@weights\("([^"]+)"\)/);
+          if (match) {
+            const [, name, dtype, shape, ref] = match;
+            graph.consts[name] = {
+              dataType: dtype.replace('f32', 'float32').replace('f16', 'float16')
+                .replace('i32', 'int32').replace('u32', 'uint32')
+                .replace('i64', 'int64').replace('u64', 'uint64')
+                .replace('i8', 'int8').replace('u8', 'uint8'),
+              shape: shape.split(',').map(s => parseInt(s.trim())),
+              init: { kind: 'weights', ref: ref }
+            };
+            continue;
+          }
+
+          // Match scalar value
+          match = line.match(/(\w+)\s*:\s*(\w+)\[([^\]]+)\]\s*=\s*([^;]+)/);
+          if (match) {
+            const [, name, dtype, shape, value] = match;
+            graph.consts[name] = {
+              dataType: dtype.replace('f32', 'float32').replace('f16', 'float16')
+                .replace('i32', 'int32').replace('u32', 'uint32')
+                .replace('i64', 'int64').replace('u64', 'uint64')
+                .replace('i8', 'int8').replace('u8', 'uint8'),
+              shape: shape.split(',').map(s => parseInt(s.trim())),
+              init: { kind: 'scalar', value: parseFloat(value.trim()) }
+            };
+          }
+        }
+      }
+
+      // Parse nodes block
+      const nodesMatch = text.match(/nodes\s*{([^}]*)}/);
+      if (nodesMatch) {
+        const nodeLines = nodesMatch[1].split(';').filter(l => l.trim());
+        for (const line of nodeLines) {
+          // Match multi-output nodes: [a, b] = op(...)
+          let match = line.match(/\[([^\]]+)\]\s*=\s*(\w+)\(([^)]*)\)/);
+          if (match) {
+            const [, outputs, op, inputs] = match;
+            const outputIds = outputs.split(',').map(s => s.trim());
+            const inputIds = inputs.split(',').map(s => s.trim()).filter(s => s);
+            graph.nodes.push({
+              id: outputIds[0],
+              op: op,
+              inputs: inputIds,
+              options: {},
+              outputs: outputIds
+            });
+            continue;
+          }
+
+          // Match single-output nodes with options: result = op(input1, input2, key=value)
+          match = line.match(/(\w+)\s*=\s*(\w+)\(([^)]*)\)/);
+          if (match) {
+            const [, id, op, args] = match;
+            const parts = args.split(',').map(s => s.trim()).filter(s => s);
+            const inputs = [];
+            const options = {};
+
+            for (const part of parts) {
+              if (part.includes('=')) {
+                const [key, value] = part.split('=').map(s => s.trim());
+                // Try to parse as number
+                const numValue = parseFloat(value);
+                options[key] = isNaN(numValue) ? value : numValue;
+              } else {
+                inputs.push(part);
+              }
+            }
+
+            graph.nodes.push({
+              id: id,
+              op: op,
+              inputs: inputs,
+              options: options,
+              outputs: null
+            });
+          }
+        }
+      }
+
+      // Parse outputs block
+      const outputsMatch = text.match(/outputs\s*{([^}]*)}/);
+      if (outputsMatch) {
+        const outputLines = outputsMatch[1].split(';').filter(l => l.trim());
+        for (const line of outputLines) {
+          const name = line.trim();
+          if (name) {
+            graph.outputs[name] = name;
+          }
+        }
+      }
+
+      return graph;
+    }
+
+    // ============================================================================
+    // FileLoader: Handle drag-and-drop and file input
+    // ============================================================================
+    class FileLoader {
+      constructor(onLoad) {
+        this.onLoad = onLoad;
+        this.setupEventListeners();
+      }
+
+      setupEventListeners() {
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+
+        // Drag and drop
+        document.addEventListener('dragenter', (e) => {
+          e.preventDefault();
+          dropZone.classList.add('active');
+        });
+
+        document.addEventListener('dragover', (e) => {
+          e.preventDefault();
+        });
+
+        document.addEventListener('dragleave', (e) => {
+          if (e.target === document.body || e.target === dropZone) {
+            dropZone.classList.remove('active');
+          }
+        });
+
+        document.addEventListener('drop', (e) => {
+          e.preventDefault();
+          dropZone.classList.remove('active');
+
+          const files = e.dataTransfer.files;
+          if (files.length > 0) {
+            this.loadFile(files[0]);
+          }
+        });
+
+        // File input button
+        fileInput.addEventListener('change', (e) => {
+          const files = e.target.files;
+          if (files.length > 0) {
+            this.loadFile(files[0]);
+          }
+        });
+      }
+
+      loadFile(file) {
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+          try {
+            const content = e.target.result;
+            let graphData;
+
+            if (file.name.endsWith('.json')) {
+              // Parse JSON
+              graphData = JSON.parse(content);
+            } else if (file.name.endsWith('.webnn')) {
+              // Parse .webnn text format
+              graphData = parseWebNNText(content);
+            } else {
+              throw new Error('Unsupported file type. Please use .webnn or .json files.');
+            }
+
+            console.log('Loaded graph:', graphData.name || 'unnamed', 'from', file.name);
+            this.onLoad(graphData);
+          } catch (error) {
+            console.error('Failed to load file:', error);
+            alert(`Error loading file: ${error.message}`);
+          }
+        };
+
+        reader.readAsText(file);
+      }
+    }
 
     // ============================================================================
     // GraphParser: Convert GraphJson to Dagre graph structure
@@ -820,10 +1116,33 @@
     class App {
       constructor(graphData) {
         this.graphData = graphData;
+        this.interactionController = null;
+        this.sidebarController = null;
+        this.exportController = null;
+        this.fitBtnListener = null;
       }
 
       initialize() {
+        // Setup file loader for drag-and-drop
+        new FileLoader((graphData) => {
+          this.loadGraph(graphData);
+        });
+
+        // Setup export controller (only once)
+        if (!this.exportController) {
+          this.exportController = new ExportController();
+        }
+
+        // Load initial graph
+        if (this.graphData) {
+          this.loadGraph(this.graphData);
+        }
+      }
+
+      loadGraph(graphData) {
         try {
+          this.graphData = graphData;
+
           // Build Dagre graph
           const dagreGraph = buildDagreGraph(this.graphData);
 
@@ -833,25 +1152,27 @@
           renderer.render(dagreGraph);
 
           // Setup interaction
-          const interactionController = new InteractionController(svg, renderer);
+          this.interactionController = new InteractionController(svg, renderer);
 
           // Setup sidebar
-          const sidebarController = new SidebarController(this.graphData, dagreGraph);
+          this.sidebarController = new SidebarController(this.graphData, dagreGraph);
 
-          // Setup export
-          const exportController = new ExportController();
+          // Fit to screen button (remove old listener if exists)
+          const fitBtn = document.getElementById('fit-btn');
+          if (this.fitBtnListener) {
+            fitBtn.removeEventListener('click', this.fitBtnListener);
+          }
+          this.fitBtnListener = () => {
+            this.interactionController.fitToScreen();
+          };
+          fitBtn.addEventListener('click', this.fitBtnListener);
 
-          // Fit to screen button
-          document.getElementById('fit-btn').addEventListener('click', () => {
-            interactionController.fitToScreen();
-          });
-
-          console.log('WebNN Graph Visualizer initialized successfully');
+          console.log('WebNN Graph Visualizer loaded successfully');
           console.log('Graph:', this.graphData.name || 'unnamed');
           console.log('Nodes:', dagreGraph.nodeCount());
           console.log('Edges:', dagreGraph.edgeCount());
         } catch (error) {
-          console.error('Failed to initialize visualizer:', error);
+          console.error('Failed to load graph:', error);
           document.getElementById('graph-container').innerHTML = `
             <div style="padding: 40px; text-align: center; color: #d32f2f;">
               <h2>Error loading graph</h2>
