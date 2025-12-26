@@ -7,6 +7,11 @@ such as graph validation, serialization, and WebNN graph construction.
 The goal is to keep the language surface **very close to WebNN itself**, while
 allowing graphs to be expressed declaratively and reused across tooling.
 
+The project also implements a Netron-like **WebNN graph visualizer** that
+allows for interactive exploration of graph structure.
+
+Check it out at [https://blog.ziade.org/webnn-graph](https://blog.ziade.org/webnn-graph)
+
 ## Conceptual Model
 
 A WebNN graph defined with this project is split across **three distinct files**, each with a single responsibility.

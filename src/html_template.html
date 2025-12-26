@@ -372,6 +372,40 @@
     #file-input {
       display: none;
     }
+
+
+  #footer {
+    flex-shrink: 0;
+    background: #ffffff;
+    border-top: 1px solid #ddd;
+    padding: 10px 20px;
+    font-size: 13px;
+    color: #666;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  #footer a {
+    color: #007bff;
+    text-decoration: none;
+    font-weight: 600;
+  }
+
+  #footer a:hover {
+    text-decoration: underline;
+  }
+
+  body.dark-mode #footer {
+    background: #2d2d2d;
+    border-top-color: #444;
+    color: #aaa;
+  }
+
+  body.dark-mode #footer a {
+    color: #64b5f6;
+  }
   </style>
 </head>
 <body>
@@ -1211,5 +1245,8 @@
       app.initialize();
     });
   </script>
+  <div id="footer">
+      Check out the <a href="https://github.com/tarekziade/webnn-wg">GitHub repository</a> for more information.
+  </div>
 </body>
 </html>
