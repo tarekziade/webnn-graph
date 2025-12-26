@@ -1,0 +1,1215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebNN Graph Visualizer</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #f5f5f5;
+      color: #333;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    body.dark-mode {
+      background: #1e1e1e;
+      color: #e0e0e0;
+    }
+
+    #toolbar {
+      background: white;
+      border-bottom: 1px solid #ddd;
+      padding: 12px 20px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    body.dark-mode #toolbar {
+      background: #2d2d2d;
+      border-bottom-color: #444;
+    }
+
+    #toolbar h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-right: auto;
+      color: #333;
+    }
+
+    body.dark-mode #toolbar h1 {
+      color: #e0e0e0;
+    }
+
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: #0056b3;
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    body.dark-mode button {
+      background: #0d6efd;
+    }
+
+    body.dark-mode button:hover {
+      background: #0b5ed7;
+    }
+
+    #main-container {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    #graph-container {
+      flex: 1;
+      position: relative;
+      background: white;
+      overflow: hidden;
+    }
+
+    body.dark-mode #graph-container {
+      background: #1e1e1e;
+    }
+
+    #graph-svg {
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+    }
+
+    #graph-svg:active {
+      cursor: grabbing;
+    }
+
+    .edge {
+      fill: none;
+      stroke: #999;
+      stroke-width: 2;
+      pointer-events: none;
+    }
+
+    body.dark-mode .edge {
+      stroke: #666;
+    }
+
+    .node {
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .node:hover {
+      opacity: 0.9;
+    }
+
+    .node rect {
+      stroke: #333;
+      stroke-width: 2;
+    }
+
+    body.dark-mode .node rect {
+      stroke: #e0e0e0;
+    }
+
+    .node text {
+      font-size: 14px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      fill: #000;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    body.dark-mode .node text {
+      fill: #000;
+    }
+
+    .node-input rect {
+      fill: #a8e6cf;
+    }
+
+    .node-const rect {
+      fill: #88d8ff;
+    }
+
+    .node-op rect {
+      fill: #ffd88a;
+    }
+
+    .node-output rect {
+      fill: #d5a8e6;
+    }
+
+    #sidebar {
+      width: 350px;
+      background: white;
+      border-left: 1px solid #ddd;
+      overflow-y: auto;
+      padding: 20px;
+      transition: transform 0.3s ease;
+      transform: translateX(100%);
+    }
+
+    #sidebar.visible {
+      transform: translateX(0);
+    }
+
+    body.dark-mode #sidebar {
+      background: #2d2d2d;
+      border-left-color: #444;
+    }
+
+    #sidebar h2 {
+      font-size: 20px;
+      margin-bottom: 16px;
+      color: #333;
+      word-break: break-word;
+    }
+
+    body.dark-mode #sidebar h2 {
+      color: #e0e0e0;
+    }
+
+    .detail-section {
+      margin-bottom: 20px;
+    }
+
+    .detail-section h3 {
+      font-size: 16px;
+      margin-bottom: 8px;
+      color: #555;
+      font-weight: 600;
+    }
+
+    body.dark-mode .detail-section h3 {
+      color: #bbb;
+    }
+
+    .detail-section p {
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+
+    .detail-section strong {
+      color: #333;
+      font-weight: 600;
+    }
+
+    body.dark-mode .detail-section strong {
+      color: #e0e0e0;
+    }
+
+    .detail-section ul {
+      margin-left: 20px;
+      margin-bottom: 8px;
+    }
+
+    .detail-section li {
+      margin-bottom: 4px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 13px;
+    }
+
+    .detail-section pre {
+      background: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 12px;
+      font-size: 13px;
+      overflow-x: auto;
+      font-family: 'Monaco', 'Courier New', monospace;
+    }
+
+    body.dark-mode .detail-section pre {
+      background: #1e1e1e;
+      border-color: #444;
+    }
+
+    .shape-badge {
+      display: inline-block;
+      background: #e3f2fd;
+      color: #1976d2;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      margin: 2px;
+    }
+
+    body.dark-mode .shape-badge {
+      background: #1e3a5f;
+      color: #64b5f6;
+    }
+
+    .type-badge {
+      display: inline-block;
+      background: #f3e5f5;
+      color: #7b1fa2;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      margin: 2px;
+    }
+
+    body.dark-mode .type-badge {
+      background: #3a1e47;
+      color: #ba68c8;
+    }
+
+    #close-sidebar {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: transparent;
+      color: #999;
+      border: none;
+      font-size: 24px;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #close-sidebar:hover {
+      background: #f0f0f0;
+      color: #333;
+    }
+
+    body.dark-mode #close-sidebar:hover {
+      background: #3a3a3a;
+      color: #e0e0e0;
+    }
+
+    #drop-zone {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 123, 255, 0.1);
+      border: 4px dashed #007bff;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    #drop-zone.active {
+      display: flex;
+    }
+
+    #drop-zone-content {
+      background: white;
+      padding: 40px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      text-align: center;
+    }
+
+    body.dark-mode #drop-zone-content {
+      background: #2d2d2d;
+    }
+
+    #drop-zone h2 {
+      margin-bottom: 12px;
+      font-size: 24px;
+    }
+
+    #drop-zone p {
+      color: #666;
+      font-size: 16px;
+    }
+
+    body.dark-mode #drop-zone p {
+      color: #999;
+    }
+
+    #file-input-label {
+      background: #28a745;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: background 0.2s;
+      display: inline-block;
+    }
+
+    #file-input-label:hover {
+      background: #218838;
+    }
+
+    #file-input {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="drop-zone">
+    <div id="drop-zone-content">
+      <h2>📁 Drop WebNN Graph File</h2>
+      <p>Drop a .webnn or .json file here</p>
+    </div>
+  </div>
+
+  <div id="toolbar">
+    <h1>WebNN Graph Visualizer</h1>
+    <label id="file-input-label" for="file-input" title="Load graph file">
+      📂 Load File
+    </label>
+    <input type="file" id="file-input" accept=".webnn,.json" />
+    <button id="fit-btn" title="Fit graph to screen">Fit to Screen</button>
+    <button id="export-svg-btn" title="Export as SVG">Export SVG</button>
+    <button id="export-png-btn" title="Export as PNG">Export PNG</button>
+    <button id="theme-toggle-btn" title="Toggle dark/light mode">Toggle Theme</button>
+  </div>
+
+  <div id="main-container">
+    <div id="graph-container">
+      <svg id="graph-svg">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 10 3, 0 6" fill="#999" />
+          </marker>
+          <marker id="arrowhead-dark" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 10 3, 0 6" fill="#666" />
+          </marker>
+        </defs>
+      </svg>
+    </div>
+
+    <div id="sidebar">
+      <button id="close-sidebar" aria-label="Close sidebar">×</button>
+      <div id="sidebar-content"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+  <script>
+    // Embedded graph data (replaced by Rust)
+    const GRAPH_DATA = {"format":"webnn-graph-json","version":1,"name":"resnet_head","inputs":{"x":{"dataType":"float32","shape":[1,2048]}},"consts":{"W":{"dataType":"float32","shape":[2048,1000],"init":{"kind":"weights","ref":"W"}},"b":{"dataType":"float32","shape":[1000],"init":{"kind":"weights","ref":"b"}}},"nodes":[{"id":"logits0","op":"matmul","inputs":["x","W"],"options":{},"outputs":null},{"id":"logits","op":"add","inputs":["logits0","b"],"options":{},"outputs":null},{"id":"probs","op":"softmax","inputs":["logits"],"options":{"axis":1},"outputs":null}],"outputs":{"probs":"probs"}};
+
+    // ============================================================================
+    // WebNN Text Format Parser
+    // ============================================================================
+    function parseWebNNText(text) {
+      // Simple .webnn text format parser
+      const graph = {
+        format: 'webnn-graph-json',
+        version: 1,
+        name: null,
+        inputs: {},
+        consts: {},
+        nodes: [],
+        outputs: {}
+      };
+
+      // Extract graph name
+      const nameMatch = text.match(/webnn_graph\s+"([^"]+)"/);
+      if (nameMatch) {
+        graph.name = nameMatch[1];
+      }
+
+      // Parse inputs block
+      const inputsMatch = text.match(/inputs\s*{([^}]*)}/);
+      if (inputsMatch) {
+        const inputLines = inputsMatch[1].split(';').filter(l => l.trim());
+        for (const line of inputLines) {
+          const match = line.match(/(\w+)\s*:\s*(\w+)\[([^\]]+)\]/);
+          if (match) {
+            const [, name, dtype, shape] = match;
+            graph.inputs[name] = {
+              dataType: dtype.replace('f32', 'float32').replace('f16', 'float16')
+                .replace('i32', 'int32').replace('u32', 'uint32')
+                .replace('i64', 'int64').replace('u64', 'uint64')
+                .replace('i8', 'int8').replace('u8', 'uint8'),
+              shape: shape.split(',').map(s => parseInt(s.trim()))
+            };
+          }
+        }
+      }
+
+      // Parse consts block
+      const constsMatch = text.match(/consts\s*{([^}]*)}/);
+      if (constsMatch) {
+        const constLines = constsMatch[1].split(';').filter(l => l.trim());
+        for (const line of constLines) {
+          // Match weights reference
+          let match = line.match(/(\w+)\s*:\s*(\w+)\[([^\]]+)\]\s*@weights\("([^"]+)"\)/);
+          if (match) {
+            const [, name, dtype, shape, ref] = match;
+            graph.consts[name] = {
+              dataType: dtype.replace('f32', 'float32').replace('f16', 'float16')
+                .replace('i32', 'int32').replace('u32', 'uint32')
+                .replace('i64', 'int64').replace('u64', 'uint64')
+                .replace('i8', 'int8').replace('u8', 'uint8'),
+              shape: shape.split(',').map(s => parseInt(s.trim())),
+              init: { kind: 'weights', ref: ref }
+            };
+            continue;
+          }
+
+          // Match scalar value
+          match = line.match(/(\w+)\s*:\s*(\w+)\[([^\]]+)\]\s*=\s*([^;]+)/);
+          if (match) {
+            const [, name, dtype, shape, value] = match;
+            graph.consts[name] = {
+              dataType: dtype.replace('f32', 'float32').replace('f16', 'float16')
+                .replace('i32', 'int32').replace('u32', 'uint32')
+                .replace('i64', 'int64').replace('u64', 'uint64')
+                .replace('i8', 'int8').replace('u8', 'uint8'),
+              shape: shape.split(',').map(s => parseInt(s.trim())),
+              init: { kind: 'scalar', value: parseFloat(value.trim()) }
+            };
+          }
+        }
+      }
+
+      // Parse nodes block
+      const nodesMatch = text.match(/nodes\s*{([^}]*)}/);
+      if (nodesMatch) {
+        const nodeLines = nodesMatch[1].split(';').filter(l => l.trim());
+        for (const line of nodeLines) {
+          // Match nodes with square brackets: [output] = op(...) or output = op(...)
+          let match = line.match(/\[?(\w+)\]?\s*=\s*(\w+)\(([^)]*)\)/);
+          if (match) {
+            const [, id, op, args] = match;
+
+            // Parse arguments - they can be inputs or key=value options
+            const parts = [];
+            let current = '';
+            let depth = 0;
+
+            // Split by comma but respect nested brackets
+            for (let i = 0; i < args.length; i++) {
+              const char = args[i];
+              if (char === '[') depth++;
+              else if (char === ']') depth--;
+              else if (char === ',' && depth === 0) {
+                parts.push(current.trim());
+                current = '';
+                continue;
+              }
+              current += char;
+            }
+            if (current.trim()) parts.push(current.trim());
+
+            const inputs = [];
+            const options = {};
+
+            for (const part of parts) {
+              if (part.includes('=')) {
+                const eqIndex = part.indexOf('=');
+                const key = part.substring(0, eqIndex).trim();
+                let value = part.substring(eqIndex + 1).trim();
+
+                // Handle different value types
+                if (value.startsWith('[') && value.endsWith(']')) {
+                  // Array value like [1, 1, 1, 1]
+                  const arrayStr = value.slice(1, -1);
+                  options[key] = arrayStr.split(',').map(v => {
+                    const num = parseFloat(v.trim());
+                    return isNaN(num) ? v.trim() : num;
+                  });
+                } else if (value.startsWith('"') && value.endsWith('"')) {
+                  // String value like "oihw"
+                  options[key] = value.slice(1, -1);
+                } else {
+                  // Numeric or boolean value
+                  const numValue = parseFloat(value);
+                  options[key] = isNaN(numValue) ? value : numValue;
+                }
+              } else if (part && !part.includes('=')) {
+                inputs.push(part);
+              }
+            }
+
+            graph.nodes.push({
+              id: id,
+              op: op,
+              inputs: inputs,
+              options: options,
+              outputs: null
+            });
+          }
+        }
+      }
+
+      // Parse outputs block
+      const outputsMatch = text.match(/outputs\s*{([^}]*)}/);
+      if (outputsMatch) {
+        const outputLines = outputsMatch[1].split(';').filter(l => l.trim());
+        for (const line of outputLines) {
+          const name = line.trim();
+          if (name) {
+            graph.outputs[name] = name;
+          }
+        }
+      }
+
+      return graph;
+    }
+
+    // ============================================================================
+    // FileLoader: Handle drag-and-drop and file input
+    // ============================================================================
+    class FileLoader {
+      constructor(onLoad) {
+        this.onLoad = onLoad;
+        this.setupEventListeners();
+      }
+
+      setupEventListeners() {
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+
+        // Drag and drop
+        document.addEventListener('dragenter', (e) => {
+          e.preventDefault();
+          dropZone.classList.add('active');
+        });
+
+        document.addEventListener('dragover', (e) => {
+          e.preventDefault();
+        });
+
+        document.addEventListener('dragleave', (e) => {
+          if (e.target === document.body || e.target === dropZone) {
+            dropZone.classList.remove('active');
+          }
+        });
+
+        document.addEventListener('drop', (e) => {
+          e.preventDefault();
+          dropZone.classList.remove('active');
+
+          const files = e.dataTransfer.files;
+          if (files.length > 0) {
+            this.loadFile(files[0]);
+          }
+        });
+
+        // File input button
+        fileInput.addEventListener('change', (e) => {
+          const files = e.target.files;
+          if (files.length > 0) {
+            this.loadFile(files[0]);
+          }
+        });
+      }
+
+      loadFile(file) {
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+          try {
+            const content = e.target.result;
+            let graphData;
+
+            if (file.name.endsWith('.json')) {
+              // Parse JSON
+              graphData = JSON.parse(content);
+            } else if (file.name.endsWith('.webnn')) {
+              // Parse .webnn text format
+              graphData = parseWebNNText(content);
+            } else {
+              throw new Error('Unsupported file type. Please use .webnn or .json files.');
+            }
+
+            console.log('Loaded graph:', graphData.name || 'unnamed', 'from', file.name);
+            this.onLoad(graphData);
+          } catch (error) {
+            console.error('Failed to load file:', error);
+            alert(`Error loading file: ${error.message}`);
+          }
+        };
+
+        reader.readAsText(file);
+      }
+    }
+
+    // ============================================================================
+    // GraphParser: Convert GraphJson to Dagre graph structure
+    // ============================================================================
+    function buildDagreGraph(graphJson) {
+      const g = new dagre.graphlib.Graph();
+      g.setGraph({ rankdir: 'TB', nodesep: 50, ranksep: 80 });
+      g.setDefaultEdgeLabel(() => ({}));
+
+      // Add input nodes
+      for (const [name, desc] of Object.entries(graphJson.inputs || {})) {
+        g.setNode(name, {
+          label: name,
+          type: 'input',
+          shape: desc.shape,
+          dataType: desc.dataType,
+          width: 140,
+          height: 60
+        });
+      }
+
+      // Add const nodes
+      for (const [name, constDecl] of Object.entries(graphJson.consts || {})) {
+        g.setNode(name, {
+          label: name,
+          type: 'const',
+          shape: constDecl.shape,
+          dataType: constDecl.dataType,
+          init: constDecl.init,
+          width: 140,
+          height: 60
+        });
+      }
+
+      // Add operation nodes and edges
+      for (const node of graphJson.nodes || []) {
+        const outputs = node.outputs || [node.id];
+
+        for (const outId of outputs) {
+          g.setNode(outId, {
+            label: `${node.op}\n${outId}`,
+            type: 'op',
+            op: node.op,
+            options: node.options,
+            nodeId: node.id,
+            inputs: node.inputs,
+            width: 150,
+            height: 70
+          });
+        }
+
+        // Add edges from inputs to this node's outputs
+        for (const input of node.inputs) {
+          for (const outId of outputs) {
+            g.setEdge(input, outId, {});
+          }
+        }
+      }
+
+      // Add output nodes
+      for (const [outName, ref] of Object.entries(graphJson.outputs || {})) {
+        const outputNodeId = `__output_${outName}`;
+        g.setNode(outputNodeId, {
+          label: `OUTPUT\n${outName}`,
+          type: 'output',
+          ref: ref,
+          width: 120,
+          height: 60
+        });
+        g.setEdge(ref, outputNodeId, {});
+      }
+
+      // Compute layout
+      dagre.layout(g);
+
+      return g;
+    }
+
+    // ============================================================================
+    // GraphRenderer: Generate SVG from Dagre layout
+    // ============================================================================
+    class GraphRenderer {
+      constructor(svgElement) {
+        this.svg = svgElement;
+      }
+
+      getNodeColor(type) {
+        const colors = {
+          'input': '#a8e6cf',
+          'const': '#88d8ff',
+          'op': '#ffd88a',
+          'output': '#d5a8e6'
+        };
+        return colors[type] || '#e0e0e0';
+      }
+
+      render(dagreGraph) {
+        // Clear existing content
+        const existingContainer = this.svg.querySelector('#graph-container');
+        if (existingContainer) {
+          existingContainer.remove();
+        }
+
+        const container = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        container.setAttribute('id', 'graph-container');
+
+        // Render edges first (behind nodes)
+        dagreGraph.edges().forEach(e => {
+          const edge = dagreGraph.edge(e);
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+
+          // Build SVG path from edge points
+          let pathData = `M ${edge.points[0].x} ${edge.points[0].y}`;
+          for (let i = 1; i < edge.points.length; i++) {
+            pathData += ` L ${edge.points[i].x} ${edge.points[i].y}`;
+          }
+
+          path.setAttribute('d', pathData);
+          path.setAttribute('class', 'edge');
+          const isDarkMode = document.body.classList.contains('dark-mode');
+          path.setAttribute('marker-end', isDarkMode ? 'url(#arrowhead-dark)' : 'url(#arrowhead)');
+
+          container.appendChild(path);
+        });
+
+        // Render nodes
+        dagreGraph.nodes().forEach(nodeId => {
+          const node = dagreGraph.node(nodeId);
+
+          const nodeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+          nodeGroup.setAttribute('class', `node node-${node.type}`);
+          nodeGroup.setAttribute('data-node-id', nodeId);
+          nodeGroup.setAttribute('transform', `translate(${node.x - node.width / 2}, ${node.y - node.height / 2})`);
+
+          // Rectangle
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('width', node.width);
+          rect.setAttribute('height', node.height);
+          rect.setAttribute('rx', 8);
+
+          // Text label (multiline support)
+          const lines = node.label.split('\n');
+          const textGroup = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          textGroup.setAttribute('x', node.width / 2);
+          textGroup.setAttribute('y', node.height / 2 - (lines.length - 1) * 8);
+          textGroup.setAttribute('text-anchor', 'middle');
+          textGroup.setAttribute('dominant-baseline', 'middle');
+
+          lines.forEach((line, i) => {
+            const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+            tspan.setAttribute('x', node.width / 2);
+            tspan.setAttribute('dy', i === 0 ? 0 : 16);
+            tspan.textContent = line;
+            textGroup.appendChild(tspan);
+          });
+
+          nodeGroup.appendChild(rect);
+          nodeGroup.appendChild(textGroup);
+          container.appendChild(nodeGroup);
+        });
+
+        this.svg.appendChild(container);
+
+        // Auto-fit viewBox
+        this.fitToScreen(dagreGraph);
+      }
+
+      fitToScreen(dagreGraph) {
+        const container = this.svg.querySelector('#graph-container');
+        if (!container) return;
+
+        const bbox = container.getBBox();
+        const padding = 50;
+
+        this.svg.setAttribute('viewBox',
+          `${bbox.x - padding} ${bbox.y - padding} ${bbox.width + padding * 2} ${bbox.height + padding * 2}`
+        );
+
+        // Store initial viewBox for interaction controller
+        this.initialViewBox = {
+          x: bbox.x - padding,
+          y: bbox.y - padding,
+          width: bbox.width + padding * 2,
+          height: bbox.height + padding * 2
+        };
+      }
+    }
+
+    // ============================================================================
+    // InteractionController: Zoom and pan
+    // ============================================================================
+    class InteractionController {
+      constructor(svg, renderer) {
+        this.svg = svg;
+        this.renderer = renderer;
+        this.viewBox = renderer.initialViewBox ? { ...renderer.initialViewBox } : { x: 0, y: 0, width: 1000, height: 800 };
+        this.isPanning = false;
+        this.startPoint = { x: 0, y: 0 };
+        this.zoomLevel = 1.0;
+
+        this.setupEventListeners();
+      }
+
+      setupEventListeners() {
+        // Zoom with mouse wheel
+        this.svg.addEventListener('wheel', (e) => {
+          e.preventDefault();
+          const delta = e.deltaY > 0 ? 1.1 : 0.9;
+          this.zoom(delta, e.clientX, e.clientY);
+        });
+
+        // Pan with mouse drag
+        this.svg.addEventListener('mousedown', (e) => {
+          if (e.button === 0 && !e.target.closest('.node')) {
+            this.isPanning = true;
+            this.startPoint = this.getMousePosition(e);
+            this.svg.style.cursor = 'grabbing';
+          }
+        });
+
+        this.svg.addEventListener('mousemove', (e) => {
+          if (this.isPanning) {
+            const currentPoint = this.getMousePosition(e);
+            this.pan(
+              currentPoint.x - this.startPoint.x,
+              currentPoint.y - this.startPoint.y
+            );
+            this.startPoint = currentPoint;
+          }
+        });
+
+        this.svg.addEventListener('mouseup', () => {
+          if (this.isPanning) {
+            this.isPanning = false;
+            this.svg.style.cursor = 'grab';
+          }
+        });
+
+        this.svg.addEventListener('mouseleave', () => {
+          if (this.isPanning) {
+            this.isPanning = false;
+            this.svg.style.cursor = 'grab';
+          }
+        });
+      }
+
+      getMousePosition(e) {
+        return { x: e.clientX, y: e.clientY };
+      }
+
+      zoom(factor, mouseX, mouseY) {
+        const svgRect = this.svg.getBoundingClientRect();
+        const relX = (mouseX - svgRect.left) / svgRect.width;
+        const relY = (mouseY - svgRect.top) / svgRect.height;
+
+        const oldWidth = this.viewBox.width;
+        const oldHeight = this.viewBox.height;
+
+        this.viewBox.width *= factor;
+        this.viewBox.height *= factor;
+
+        // Clamp zoom level (wider range for large models)
+        const minZoom = 0.01;  // Zoom out to 1% for large models like MobileNet
+        const maxZoom = 20;     // Zoom in to 2000% for detail inspection
+        if (this.viewBox.width < this.renderer.initialViewBox.width * minZoom) {
+          this.viewBox.width = this.renderer.initialViewBox.width * minZoom;
+          this.viewBox.height = this.renderer.initialViewBox.height * minZoom;
+        } else if (this.viewBox.width > this.renderer.initialViewBox.width * maxZoom) {
+          this.viewBox.width = this.renderer.initialViewBox.width * maxZoom;
+          this.viewBox.height = this.renderer.initialViewBox.height * maxZoom;
+        }
+
+        this.viewBox.x += (oldWidth - this.viewBox.width) * relX;
+        this.viewBox.y += (oldHeight - this.viewBox.height) * relY;
+
+        this.updateViewBox();
+      }
+
+      pan(dx, dy) {
+        const scale = this.viewBox.width / this.svg.clientWidth;
+        this.viewBox.x -= dx * scale;
+        this.viewBox.y -= dy * scale;
+        this.updateViewBox();
+      }
+
+      updateViewBox() {
+        this.svg.setAttribute('viewBox',
+          `${this.viewBox.x} ${this.viewBox.y} ${this.viewBox.width} ${this.viewBox.height}`
+        );
+      }
+
+      fitToScreen() {
+        this.viewBox = { ...this.renderer.initialViewBox };
+        this.updateViewBox();
+      }
+    }
+
+    // ============================================================================
+    // SidebarController: Node details display
+    // ============================================================================
+    class SidebarController {
+      constructor(graphJson, dagreGraph) {
+        this.graphJson = graphJson;
+        this.dagreGraph = dagreGraph;
+        this.sidebar = document.getElementById('sidebar');
+        this.content = document.getElementById('sidebar-content');
+
+        this.setupEventListeners();
+      }
+
+      setupEventListeners() {
+        // Click on nodes
+        document.addEventListener('click', (e) => {
+          const nodeElem = e.target.closest('.node');
+          if (nodeElem) {
+            const nodeId = nodeElem.getAttribute('data-node-id');
+            this.showNodeDetails(nodeId);
+          } else if (!e.target.closest('#sidebar')) {
+            this.hide();
+          }
+        });
+
+        // Close button
+        document.getElementById('close-sidebar').addEventListener('click', () => {
+          this.hide();
+        });
+      }
+
+      showNodeDetails(nodeId) {
+        const node = this.dagreGraph.node(nodeId);
+        if (!node) return;
+
+        let html = `<h2>${nodeId}</h2>`;
+
+        if (node.type === 'input') {
+          html += `
+            <div class="detail-section">
+              <h3>Input</h3>
+              <p><strong>Type:</strong> <span class="type-badge">${node.dataType}</span></p>
+              <p><strong>Shape:</strong> <span class="shape-badge">[${node.shape.join(', ')}]</span></p>
+            </div>
+          `;
+        } else if (node.type === 'const') {
+          html += `
+            <div class="detail-section">
+              <h3>Constant</h3>
+              <p><strong>Type:</strong> <span class="type-badge">${node.dataType}</span></p>
+              <p><strong>Shape:</strong> <span class="shape-badge">[${node.shape.join(', ')}]</span></p>
+              <p><strong>Init:</strong></p>
+              <pre>${JSON.stringify(node.init, null, 2)}</pre>
+            </div>
+          `;
+        } else if (node.type === 'op') {
+          html += `
+            <div class="detail-section">
+              <h3>Operation: ${node.op}</h3>
+              <p><strong>Inputs:</strong></p>
+              <ul>${node.inputs.map(i => `<li>${i}</li>`).join('')}</ul>
+
+              ${Object.keys(node.options || {}).length > 0 ? `
+                <p><strong>Options:</strong></p>
+                <pre>${JSON.stringify(node.options, null, 2)}</pre>
+              ` : ''}
+            </div>
+          `;
+        } else if (node.type === 'output') {
+          html += `
+            <div class="detail-section">
+              <h3>Output</h3>
+              <p><strong>References:</strong> <code>${node.ref}</code></p>
+            </div>
+          `;
+        }
+
+        this.content.innerHTML = html;
+        this.sidebar.classList.add('visible');
+      }
+
+      hide() {
+        this.sidebar.classList.remove('visible');
+      }
+    }
+
+    // ============================================================================
+    // ExportController: PNG/SVG export and theme toggle
+    // ============================================================================
+    class ExportController {
+      constructor() {
+        this.setupEventListeners();
+      }
+
+      setupEventListeners() {
+        document.getElementById('export-svg-btn').addEventListener('click', () => {
+          this.exportSVG();
+        });
+
+        document.getElementById('export-png-btn').addEventListener('click', () => {
+          this.exportPNG();
+        });
+
+        document.getElementById('theme-toggle-btn').addEventListener('click', () => {
+          this.toggleTheme();
+        });
+      }
+
+      exportSVG() {
+        const svg = document.getElementById('graph-svg');
+        const serializer = new XMLSerializer();
+        let svgString = serializer.serializeToString(svg);
+
+        // Add XML declaration and proper namespace
+        svgString = '<?xml version="1.0" encoding="UTF-8"?>\n' + svgString;
+
+        // Create blob and download
+        const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+        this.downloadBlob(blob, 'webnn-graph.svg');
+      }
+
+      exportPNG() {
+        const svg = document.getElementById('graph-svg');
+        const svgData = new XMLSerializer().serializeToString(svg);
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Get SVG viewBox
+        const viewBox = svg.getAttribute('viewBox').split(' ').map(Number);
+        canvas.width = viewBox[2];
+        canvas.height = viewBox[3];
+
+        const img = new Image();
+        const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(svgBlob);
+
+        img.onload = () => {
+          // Fill white background
+          ctx.fillStyle = 'white';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          // Draw SVG
+          ctx.drawImage(img, 0, 0);
+
+          canvas.toBlob((blob) => {
+            this.downloadBlob(blob, 'webnn-graph.png');
+            URL.revokeObjectURL(url);
+          });
+        };
+
+        img.src = url;
+      }
+
+      downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      toggleTheme() {
+        document.body.classList.toggle('dark-mode');
+
+        // Update arrow markers
+        const isDarkMode = document.body.classList.contains('dark-mode');
+        document.querySelectorAll('.edge').forEach(edge => {
+          edge.setAttribute('marker-end', isDarkMode ? 'url(#arrowhead-dark)' : 'url(#arrowhead)');
+        });
+      }
+    }
+
+    // ============================================================================
+    // App: Bootstrap and initialization
+    // ============================================================================
+    class App {
+      constructor(graphData) {
+        this.graphData = graphData;
+        this.interactionController = null;
+        this.sidebarController = null;
+        this.exportController = null;
+        this.fitBtnListener = null;
+      }
+
+      initialize() {
+        // Setup file loader for drag-and-drop
+        new FileLoader((graphData) => {
+          this.loadGraph(graphData);
+        });
+
+        // Setup export controller (only once)
+        if (!this.exportController) {
+          this.exportController = new ExportController();
+        }
+
+        // Load initial graph
+        if (this.graphData) {
+          this.loadGraph(this.graphData);
+        }
+      }
+
+      loadGraph(graphData) {
+        try {
+          this.graphData = graphData;
+
+          // Build Dagre graph
+          const dagreGraph = buildDagreGraph(this.graphData);
+
+          // Render graph
+          const svg = document.getElementById('graph-svg');
+          const renderer = new GraphRenderer(svg);
+          renderer.render(dagreGraph);
+
+          // Setup interaction
+          this.interactionController = new InteractionController(svg, renderer);
+
+          // Setup sidebar
+          this.sidebarController = new SidebarController(this.graphData, dagreGraph);
+
+          // Fit to screen button (remove old listener if exists)
+          const fitBtn = document.getElementById('fit-btn');
+          if (this.fitBtnListener) {
+            fitBtn.removeEventListener('click', this.fitBtnListener);
+          }
+          this.fitBtnListener = () => {
+            this.interactionController.fitToScreen();
+          };
+          fitBtn.addEventListener('click', this.fitBtnListener);
+
+          console.log('WebNN Graph Visualizer loaded successfully');
+          console.log('Graph:', this.graphData.name || 'unnamed');
+          console.log('Nodes:', dagreGraph.nodeCount());
+          console.log('Edges:', dagreGraph.edgeCount());
+        } catch (error) {
+          console.error('Failed to load graph:', error);
+          document.getElementById('graph-container').innerHTML = `
+            <div style="padding: 40px; text-align: center; color: #d32f2f;">
+              <h2>Error loading graph</h2>
+              <p>${error.message}</p>
+              <pre style="text-align: left; background: #f5f5f5; padding: 20px; border-radius: 4px; overflow: auto;">${error.stack}</pre>
+            </div>
+          `;
+        }
+      }
+    }
+
+    // ============================================================================
+    // Bootstrap on page load
+    // ============================================================================
+    document.addEventListener('DOMContentLoaded', () => {
+      const app = new App(GRAPH_DATA);
+      app.initialize();
+    });
+  </script>
+</body>
+</html>
