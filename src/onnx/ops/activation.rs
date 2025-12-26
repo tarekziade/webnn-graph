@@ -127,7 +127,10 @@ mod tests {
     fn test_convert_relu() {
         let handler = ActivationHandler;
         let node = create_test_node("Relu", vec!["x"], vec!["y"]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);
@@ -139,7 +142,10 @@ mod tests {
     fn test_convert_sqrt() {
         let handler = ActivationHandler;
         let node = create_test_node("Sqrt", vec!["x"], vec!["y"]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);
@@ -151,7 +157,10 @@ mod tests {
     fn test_convert_gelu() {
         let handler = ActivationHandler;
         let node = create_test_node("Gelu", vec!["x"], vec!["y"]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);

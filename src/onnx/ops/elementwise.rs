@@ -102,7 +102,10 @@ mod tests {
     fn test_convert_add() {
         let handler = ElementwiseHandler;
         let node = create_test_node("Add", vec!["a", "b"], vec!["c"]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);
@@ -115,7 +118,10 @@ mod tests {
     fn test_convert_mul() {
         let handler = ElementwiseHandler;
         let node = create_test_node("Mul", vec!["x", "y"], vec!["z"]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);
@@ -127,7 +133,10 @@ mod tests {
     fn test_convert_div() {
         let handler = ElementwiseHandler;
         let node = create_test_node("Div", vec!["a", "b"], vec!["c"]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);

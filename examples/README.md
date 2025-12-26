@@ -210,8 +210,84 @@ To add your own weights:
 - Re-run `build_example.sh` to regenerate the weights file
 - Ensure the manifest matches the weights file
 
+## ONNX Conversion Workflow
+
+If you have an existing ONNX model, you can convert it to WebNN format. This is especially useful for transformer models like BERT.
+
+### Prerequisites
+
+Install `onnx-simplifier` to preprocess your ONNX models:
+
+```bash
+pip install onnxsim
+```
+
+### Step-by-Step Example
+
+```bash
+# Step 1: Simplify your ONNX model with static shapes (REQUIRED!)
+# This removes dynamic Shape operations that WebNN doesn't support
+onnxsim your-model.onnx your-model-static.onnx \
+  --overwrite-input-shape input_ids:1,128 attention_mask:1,128
+
+# Step 2: Convert ONNX to WebNN
+cargo run -- convert-onnx --input your-model-static.onnx
+
+# This creates three files:
+# - your-model-static.webnn (graph structure)
+# - your-model-static.weights (binary weights)
+# - your-model-static.manifest.json (weights metadata)
+
+# Step 3: Generate JavaScript
+cargo run -- emit-js your-model-static.webnn > your-model.js
+
+# Step 4: Create an interactive visualizer
+cargo run -- emit-html your-model-static.webnn > visualizer.html
+open visualizer.html
+```
+
+### Why Simplification is Required
+
+WebNN doesn't support dynamic shapes. ONNX models (especially transformers) often use patterns like:
+
+```
+Shape → Gather → Concat → Reshape
+```
+
+These compute shapes at runtime. `onnx-simplifier` resolves these to static constants:
+
+- ✅ Before: `Shape` operation computes dimensions dynamically
+- ✅ After: Reshape uses constant `[1, 128, 768]` directly
+
+**Results for BERT models:**
+- Original: ~637 nodes with Shape operations
+- Simplified: ~317 nodes (50% reduction)
+- All reshape operations use static constants
+
+### Using the Converted Model
+
+The converted WebNN model can be used just like the manual examples:
+
+```javascript
+// Load the converted model
+const weights = await WeightsFile.load('your-model-static.weights',
+                                        'your-model-static.manifest.json');
+const context = await navigator.ml.createContext();
+const graph = await buildGraph(context, weights);
+
+// Run inference with your input data
+const inputIds = new Int32Array([101, 2023, 2003, ...]);
+const attentionMask = new Int32Array([1, 1, 1, ...]);
+
+const result = await context.compute(graph, {
+  input_ids: inputIds,
+  attention_mask: attentionMask
+});
+```
+
 ## Next Steps
 
 - Modify `resnet_head.webnn` to define your own graph
 - Replace tensors with your trained model weights
+- Convert existing ONNX models using the workflow above
 - Use the generated JavaScript in your web application

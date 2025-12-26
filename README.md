@@ -155,6 +155,7 @@ All CLI commands auto-detect and accept both formats.
 
 ## Features
 
+- **Convert ONNX models** to WebNN format (with static shape preprocessing)
 - Parse WebNN graph text (`.webnn`) into a simple AST
 - Serialize the AST to canonical JSON
 - Serialize JSON back to `.webnn` with full round-trip support
@@ -201,6 +202,106 @@ dtype[dim0, dim1, ...]
 ```
 
 Supported dtypes: `f32`, `f16`, `i32`, `u32`,`i64`, `u64`, `i8`, `u8`.
+
+## ONNX to WebNN Conversion
+
+The CLI includes a powerful ONNX-to-WebNN converter that enables you to take existing ONNX models and convert them to the WebNN format.
+
+### Prerequisites: Static Shapes Required
+
+**Important:** WebNN does not support dynamic shapes at runtime. Before converting ONNX models, you **must** resolve all dynamic dimensions using `onnx-simplifier`.
+
+#### Why is this necessary?
+
+WebNN's `reshape` operation requires the shape parameter to be a constant, not a dynamically computed value. Many ONNX models (especially transformers/BERT) use dynamic shape patterns like:
+
+```
+Shape → Gather → Concat → Reshape
+```
+
+These patterns must be resolved to static constants at conversion time. Without simplification, the converter will fail or produce incorrect results.
+
+#### How to preprocess ONNX models
+
+Install and use `onnx-simplifier`:
+
+```bash
+# Install onnx-simplifier
+pip install onnxsim
+
+# Simplify model with static input shapes
+onnxsim model.onnx model-static.onnx \
+  --overwrite-input-shape input_ids:1,128 attention_mask:1,128
+
+# For BERT/Transformer models, specify all inputs
+onnxsim bert.onnx bert-static.onnx \
+  --overwrite-input-shape input_ids:1,512 attention_mask:1,512 token_type_ids:1,512
+```
+
+**Results after simplification:**
+- All `Shape` operations removed (dynamic → static constants)
+- `Reshape` operations use constant values instead of runtime computation
+- 40-50% fewer nodes in complex transformer models
+- Model becomes compatible with WebNN conversion
+
+### Converting ONNX Models
+
+Once your model is simplified with static shapes, convert it to WebNN:
+
+```bash
+# Basic conversion (extracts weights by default)
+webnn-graph convert-onnx --input model-static.onnx
+
+# Output: model-static.webnn + model-static.weights + model-static.manifest.json
+
+# Custom output paths
+webnn-graph convert-onnx \
+  --input model-static.onnx \
+  --output graph.webnn \
+  --weights graph.weights \
+  --manifest graph.manifest.json
+
+# Inline weights for small models (not recommended for large models)
+webnn-graph convert-onnx --input model.onnx --inline-weights
+
+# Output to JSON format instead of .webnn
+webnn-graph convert-onnx --input model.onnx --output model.json
+```
+
+### Supported ONNX Operations
+
+The converter focuses on NLP/Transformer operations:
+
+- **Matrix operations**: MatMul, Gemm
+- **Element-wise**: Add, Sub, Mul, Div, Pow
+- **Normalization**: LayerNormalization, Softmax
+- **Tensor manipulation**: Reshape, Transpose, Concat, Split, Squeeze, Unsqueeze
+- **Activation**: Relu, Sigmoid, Tanh, Gelu, etc.
+- **Reduction**: ReduceMean, ReduceSum, ReduceMax, ReduceMin
+- **Utility**: Gather, Slice
+
+### Complete ONNX Workflow Example
+
+```bash
+# Step 1: Simplify ONNX model with static shapes (REQUIRED!)
+onnxsim bert-base.onnx bert-static.onnx \
+  --overwrite-input-shape input_ids:1,128 attention_mask:1,128 token_type_ids:1,128
+
+# Step 2: Convert ONNX → WebNN
+webnn-graph convert-onnx --input bert-static.onnx
+
+# Step 3: Generate JavaScript for browser/runtime
+webnn-graph emit-js bert-static.webnn > buildGraph.js
+
+# Step 4: (Optional) Create HTML visualizer
+webnn-graph emit-html bert-static.webnn > visualizer.html
+open visualizer.html
+```
+
+**Example results for BERT models:**
+- **Original ONNX**: 637 nodes with Shape operations
+- **Simplified ONNX**: 317 nodes (50% reduction), no Shape operations
+- **WebNN output**: All reshape operations use static constants, fully compatible
 
 ## Examples
 

@@ -263,7 +263,10 @@ mod tests {
     fn test_convert_matmul() {
         let handler = MatMulHandler;
         let node = create_test_node("MatMul", vec!["a", "b"], vec!["c"]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);
@@ -276,7 +279,10 @@ mod tests {
     fn test_convert_gemm_simple() {
         let handler = MatMulHandler;
         let node = create_test_node("Gemm", vec!["a", "b"], vec!["c"]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         // Simple Gemm without C, alpha=1, beta=1 should produce just matmul

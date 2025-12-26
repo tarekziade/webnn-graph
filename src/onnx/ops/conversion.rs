@@ -179,7 +179,10 @@ mod tests {
         let handler = ConversionHandler;
         let mut node = create_test_node("Cast", vec!["x"], vec!["y"]);
         add_int_attribute(&mut node, "to", 7); // INT64
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);

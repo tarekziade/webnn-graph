@@ -2,7 +2,8 @@
 
 use crate::ast::Node;
 use crate::onnx::convert::OnnxError;
-use onnx::onnx::NodeProto;
+use onnx::onnx::{NodeProto, TensorProto};
+use std::collections::HashMap;
 
 pub mod activation;
 pub mod conversion;
@@ -23,8 +24,11 @@ use reshape::ReshapeHandler;
 use utility::UtilityHandler;
 
 /// Context for operator conversion
-pub struct ConversionContext {
-    // TODO: Add context fields as needed (e.g., value_info, constants)
+pub struct ConversionContext<'a> {
+    /// Map of initializer names to TensorProto (for resolving constant shapes)
+    pub initializers: HashMap<String, &'a TensorProto>,
+    /// Map of value names to their shapes (for shape inference)
+    pub value_shapes: HashMap<String, Vec<i64>>,
 }
 
 /// Trait for handling ONNX operator conversion
@@ -33,10 +37,10 @@ pub trait OpHandler {
     fn supports(&self, op_type: &str) -> bool;
 
     /// Convert an ONNX node to WebNN node(s)
-    fn convert(
+    fn convert<'a>(
         &self,
         node: &NodeProto,
-        context: &ConversionContext,
+        context: &ConversionContext<'a>,
     ) -> Result<Vec<Node>, OnnxError>;
 }
 
@@ -63,10 +67,10 @@ impl OpRegistry {
     }
 
     /// Convert an ONNX node using the appropriate handler
-    pub fn convert_node(
+    pub fn convert_node<'a>(
         &self,
         node: &NodeProto,
-        context: &ConversionContext,
+        context: &ConversionContext<'a>,
     ) -> Result<Vec<Node>, OnnxError> {
         let op_type = node.get_op_type();
 

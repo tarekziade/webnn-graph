@@ -194,6 +194,20 @@ impl OnnxConverter {
         // Process initializers (constants/weights)
         for initializer in onnx_graph.get_initializer() {
             let name = sanitize_identifier(initializer.get_name());
+            let raw_data = initializer.get_raw_data();
+
+            // Skip initializers with no data (check both raw_data and typed data fields)
+            let has_data = !raw_data.is_empty()
+                || !initializer.get_float_data().is_empty()
+                || !initializer.get_int32_data().is_empty()
+                || !initializer.get_int64_data().is_empty()
+                || !initializer.get_double_data().is_empty();
+
+            if !has_data {
+                eprintln!("Warning: Skipping initializer '{}' with no data", name);
+                continue;
+            }
+
             let onnx_type = initializer.get_data_type() as i32;
             let data_type = crate::onnx::types::map_onnx_data_type(onnx_type)?;
             let shape: Vec<u32> = initializer.get_dims().iter().map(|d| *d as u32).collect();
@@ -205,7 +219,7 @@ impl OnnxConverter {
                 }
             } else {
                 // Inline bytes
-                let bytes = initializer.get_raw_data().to_vec();
+                let bytes = raw_data.to_vec();
                 crate::ast::ConstInit::InlineBytes { bytes }
             };
 
@@ -221,7 +235,97 @@ impl OnnxConverter {
 
         // Process nodes using OpRegistry
         let registry = crate::onnx::ops::OpRegistry::new();
-        let context = crate::onnx::ops::ConversionContext {};
+
+        // Build initializers map for resolving constant shapes
+        let mut initializers_map = std::collections::HashMap::new();
+        for initializer in onnx_graph.get_initializer() {
+            // Skip initializers with no data (check both raw_data and typed data fields)
+            let has_data = !initializer.get_raw_data().is_empty()
+                || !initializer.get_float_data().is_empty()
+                || !initializer.get_int32_data().is_empty()
+                || !initializer.get_int64_data().is_empty()
+                || !initializer.get_double_data().is_empty();
+
+            if !has_data {
+                continue;
+            }
+            initializers_map.insert(initializer.get_name().to_string(), initializer);
+        }
+
+        // Build value_shapes map from value_info and inputs for shape inference
+        let mut value_shapes = std::collections::HashMap::new();
+
+        // Add input shapes (skip dynamic dimensions)
+        for input in onnx_graph.get_input() {
+            if input.has_field_type() && input.get_field_type().has_tensor_type() {
+                let type_proto = input.get_field_type().get_tensor_type();
+                if type_proto.has_shape() {
+                    let shape: Vec<i64> = type_proto
+                        .get_shape()
+                        .get_dim()
+                        .iter()
+                        .map(|d| {
+                            if d.has_dim_value() {
+                                d.get_dim_value()
+                            } else {
+                                -1
+                            }
+                        })
+                        .collect();
+                    // Only add if all dimensions are positive (WebNN requirement)
+                    if shape.iter().all(|&d| d > 0) {
+                        value_shapes.insert(input.get_name().to_string(), shape);
+                    }
+                }
+            }
+        }
+
+        // Add initializer shapes
+        for initializer in onnx_graph.get_initializer() {
+            // Skip initializers with no data (check both raw_data and typed data fields)
+            let has_data = !initializer.get_raw_data().is_empty()
+                || !initializer.get_float_data().is_empty()
+                || !initializer.get_int32_data().is_empty()
+                || !initializer.get_int64_data().is_empty()
+                || !initializer.get_double_data().is_empty();
+
+            if !has_data {
+                continue;
+            }
+            let shape: Vec<i64> = initializer.get_dims().to_vec();
+            value_shapes.insert(initializer.get_name().to_string(), shape);
+        }
+
+        // Add value_info shapes (intermediate tensors from shape inference)
+        // Skip shapes with dynamic dimensions (0 or -1) as WebNN requires concrete shapes
+        for value_info in onnx_graph.get_value_info() {
+            if value_info.has_field_type() && value_info.get_field_type().has_tensor_type() {
+                let type_proto = value_info.get_field_type().get_tensor_type();
+                if type_proto.has_shape() {
+                    let shape: Vec<i64> = type_proto
+                        .get_shape()
+                        .get_dim()
+                        .iter()
+                        .map(|d| {
+                            if d.has_dim_value() {
+                                d.get_dim_value()
+                            } else {
+                                -1
+                            }
+                        })
+                        .collect();
+                    // Only add if all dimensions are positive (WebNN requirement)
+                    if shape.iter().all(|&d| d > 0) {
+                        value_shapes.insert(value_info.get_name().to_string(), shape);
+                    }
+                }
+            }
+        }
+
+        let context = crate::onnx::ops::ConversionContext {
+            initializers: initializers_map,
+            value_shapes,
+        };
 
         for onnx_node in onnx_graph.get_node() {
             let converted_nodes = registry.convert_node(onnx_node, &context)?;
@@ -307,7 +411,37 @@ fn extract_weights_from_onnx(
 
         let shape: Vec<u32> = initializer.get_dims().iter().map(|d| *d as u32).collect();
         let raw_data = initializer.get_raw_data();
-        let byte_length = raw_data.len() as u64;
+
+        // Convert typed data to bytes if raw_data is empty
+        let bytes_to_write: Vec<u8> = if raw_data.is_empty() {
+            // Try to extract from typed data fields
+            let int64_data = initializer.get_int64_data();
+            let float_data = initializer.get_float_data();
+            let int32_data = initializer.get_int32_data();
+            let double_data = initializer.get_double_data();
+
+            if !int64_data.is_empty() {
+                // Convert int64_data to bytes (little-endian)
+                int64_data.iter().flat_map(|&v| v.to_le_bytes()).collect()
+            } else if !float_data.is_empty() {
+                // Convert float_data to bytes (little-endian)
+                float_data.iter().flat_map(|&v| v.to_le_bytes()).collect()
+            } else if !int32_data.is_empty() {
+                // Convert int32_data to bytes (little-endian)
+                int32_data.iter().flat_map(|&v| v.to_le_bytes()).collect()
+            } else if !double_data.is_empty() {
+                // Convert double_data to bytes (little-endian)
+                double_data.iter().flat_map(|&v| v.to_le_bytes()).collect()
+            } else {
+                // No data at all - skip this initializer
+                eprintln!("Warning: Skipping initializer '{}' with no data", name);
+                continue;
+            }
+        } else {
+            raw_data.to_vec()
+        };
+
+        let byte_length = bytes_to_write.len() as u64;
 
         // Add to manifest
         manifest.tensors.insert(
@@ -322,7 +456,7 @@ fn extract_weights_from_onnx(
         );
 
         // Append to weights data
-        weights_data.extend_from_slice(raw_data);
+        weights_data.extend_from_slice(&bytes_to_write);
         current_offset += byte_length;
     }
 

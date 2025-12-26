@@ -190,7 +190,10 @@ mod tests {
         let handler = NormalizationHandler;
         let mut node = create_test_node("Softmax", vec!["x"], vec!["y"]);
         add_int_attribute(&mut node, "axis", -1);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);
@@ -204,7 +207,10 @@ mod tests {
     fn test_convert_layer_norm() {
         let handler = NormalizationHandler;
         let node = create_test_node("LayerNormalization", vec!["x", "scale", "bias"], vec!["y"]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);

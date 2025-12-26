@@ -230,7 +230,10 @@ mod tests {
     fn test_convert_shape() {
         let handler = UtilityHandler;
         let node = create_test_node("Shape", vec!["x"], vec!["shape"]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);
@@ -243,7 +246,10 @@ mod tests {
         let handler = UtilityHandler;
         let mut node = create_test_node("Gather", vec!["data", "indices"], vec!["output"]);
         add_int_attribute(&mut node, "axis", 1);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);
@@ -256,7 +262,10 @@ mod tests {
     fn test_convert_slice() {
         let handler = UtilityHandler;
         let node = create_test_node("Slice", vec!["x", "starts", "ends"], vec!["output"]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);

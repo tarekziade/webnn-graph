@@ -115,6 +115,31 @@ webnn-graph parse model.webnn | webnn-graph serialize /dev/stdin > model_copy.we
 
 ### ONNX Conversion
 
+**Prerequisites: Static Shapes Required**
+
+WebNN does not support dynamic shapes at runtime. Before converting ONNX models, you must:
+
+1. **Resolve all dynamic dimensions** using onnx-simplifier:
+```bash
+# Install onnx-simplifier
+pip install onnxsim
+
+# Simplify model with static input shapes
+onnxsim model.onnx model-static.onnx \
+  --overwrite-input-shape input_ids:1,128 attention_mask:1,128
+
+# For BERT/Transformer models, set batch_size and sequence_length
+onnxsim bert.onnx bert-static.onnx \
+  --overwrite-input-shape input_ids:1,512 attention_mask:1,512 token_type_ids:1,512
+```
+
+This eliminates Shape, Gather, Concat operations that WebNN cannot support. The simplified model will have:
+- All Shape operations removed (dynamic → static constants)
+- Reshape operations using constant values instead of runtime computation
+- 40-50% fewer nodes in complex transformer models
+
+**Why this is necessary**: WebNN's `reshape` operation requires the shape parameter to be a constant, not a dynamically computed value. ONNX models with dynamic shapes use `Shape→Gather→Concat→Reshape` patterns that must be resolved to static constants at conversion time.
+
 Convert ONNX models to WebNN format:
 ```bash
 # Basic conversion (extracts weights by default)
@@ -144,9 +169,20 @@ webnn-graph convert-onnx --input model.onnx --output model.json
 
 **Full pipeline example**:
 ```bash
-# Convert ONNX → WebNN → JavaScript
-webnn-graph convert-onnx --input model.onnx
-webnn-graph emit-js model.webnn > buildGraph.js
+# Step 1: Simplify ONNX model with static shapes (REQUIRED for transformers!)
+onnxsim model.onnx model-static.onnx \
+  --overwrite-input-shape input_ids:1,128 attention_mask:1,128
+
+# Step 2: Convert ONNX → WebNN
+webnn-graph convert-onnx --input model-static.onnx
+
+# Step 3: Generate JavaScript
+webnn-graph emit-js model-static.webnn > buildGraph.js
+
+# Example results for BERT models:
+# - Original: 637 nodes with Shape operations
+# - Simplified: 317 nodes (50% reduction), no Shape operations
+# - All reshape operations use static constants
 ```
 
 ### Weights Management

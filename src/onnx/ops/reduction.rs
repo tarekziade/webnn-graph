@@ -154,7 +154,10 @@ mod tests {
         let mut node = create_test_node("ReduceMean", vec!["x"], vec!["y"]);
         add_ints_attribute(&mut node, "axes", vec![1, 2]);
         add_int_attribute(&mut node, "keepdims", 1);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);
@@ -169,7 +172,10 @@ mod tests {
         let handler = ReductionHandler;
         let mut node = create_test_node("ReduceSum", vec!["x"], vec!["y"]);
         add_ints_attribute(&mut node, "axes", vec![0]);
-        let context = ConversionContext {};
+        let context = ConversionContext {
+            initializers: std::collections::HashMap::new(),
+            value_shapes: std::collections::HashMap::new(),
+        };
 
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.len(), 1);
