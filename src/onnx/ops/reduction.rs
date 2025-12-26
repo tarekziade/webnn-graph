@@ -1,7 +1,7 @@
 // Reduction operators: ReduceMean, ReduceSum, ReduceMax, ReduceMin
 
 use crate::ast::Node;
-use crate::onnx::convert::OnnxError;
+use crate::onnx::convert::{sanitize_identifier, OnnxError};
 use crate::onnx::ops::{ConversionContext, OpHandler};
 use onnx::onnx::NodeProto;
 use serde_json::Map;
@@ -78,8 +78,10 @@ impl ReductionHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
+
+        let input0 = sanitize_identifier(&inputs[0].to_string());
 
         let mut options = Map::new();
 
@@ -97,7 +99,7 @@ impl ReductionHandler {
         Ok(vec![Node {
             id: output_name,
             op: webnn_op.to_string(),
-            inputs: vec![inputs[0].to_string()],
+            inputs: vec![input0],
             options,
             outputs: None,
         }])

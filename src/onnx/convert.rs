@@ -35,6 +35,12 @@ pub enum OnnxError {
     ShapeInference(String),
 }
 
+/// Sanitize ONNX identifiers for WebNN DSL compatibility
+/// Replaces problematic characters that would confuse the parser
+pub fn sanitize_identifier(name: &str) -> String {
+    name.replace("::", "__").replace(':', "_")
+}
+
 /// Conversion options for ONNX to WebNN
 #[derive(Debug, Clone)]
 pub struct ConvertOptions {
@@ -140,10 +146,11 @@ impl OnnxConverter {
             .collect();
 
         for input in onnx_graph.get_input() {
-            let name = input.get_name().to_string();
+            let raw_name = input.get_name().to_string();
+            let name = sanitize_identifier(&raw_name);
 
             // Skip if this is an initializer (constant)
-            if initializer_names.contains(&name) {
+            if initializer_names.contains(&raw_name) {
                 continue;
             }
 
@@ -186,15 +193,15 @@ impl OnnxConverter {
 
         // Process initializers (constants/weights)
         for initializer in onnx_graph.get_initializer() {
-            let name = initializer.get_name().to_string();
+            let name = sanitize_identifier(initializer.get_name());
             let onnx_type = initializer.get_data_type() as i32;
             let data_type = crate::onnx::types::map_onnx_data_type(onnx_type)?;
             let shape: Vec<u32> = initializer.get_dims().iter().map(|d| *d as u32).collect();
 
             let init = if options.extract_weights {
-                // External weights reference
+                // External weights reference (use original name for weights file)
                 crate::ast::ConstInit::Weights {
-                    r#ref: name.clone(),
+                    r#ref: sanitize_identifier(initializer.get_name()),
                 }
             } else {
                 // Inline bytes
@@ -223,7 +230,7 @@ impl OnnxConverter {
 
         // Process outputs
         for output in onnx_graph.get_output() {
-            let name = output.get_name().to_string();
+            let name = sanitize_identifier(output.get_name());
             // In WebNN, outputs map output names to the node result names
             self.graph.outputs.insert(name.clone(), name);
         }
@@ -292,7 +299,7 @@ fn extract_weights_from_onnx(
 
     // Process each initializer
     for initializer in onnx_graph.get_initializer() {
-        let name = initializer.get_name().to_string();
+        let name = sanitize_identifier(initializer.get_name());
 
         // Convert ONNX data type enum to i32, then to WebNN DataType
         let onnx_type = initializer.get_data_type() as i32;

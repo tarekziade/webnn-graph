@@ -1,7 +1,7 @@
 // Elementwise binary operators: Add, Sub, Mul, Div, Pow
 
 use crate::ast::Node;
-use crate::onnx::convert::OnnxError;
+use crate::onnx::convert::{sanitize_identifier, OnnxError};
 use crate::onnx::ops::{ConversionContext, OpHandler};
 use onnx::onnx::NodeProto;
 use serde_json::Map;
@@ -37,8 +37,12 @@ impl OpHandler for ElementwiseHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
+
+        // Sanitize input names
+        let input0 = sanitize_identifier(&inputs[0].to_string());
+        let input1 = sanitize_identifier(&inputs[1].to_string());
 
         // Map ONNX operator to WebNN operator (lowercase)
         let webnn_op = match op_type {
@@ -58,7 +62,7 @@ impl OpHandler for ElementwiseHandler {
         Ok(vec![Node {
             id: output_name,
             op: webnn_op.to_string(),
-            inputs: vec![inputs[0].to_string(), inputs[1].to_string()],
+            inputs: vec![input0, input1],
             options: Map::new(),
             outputs: None,
         }])

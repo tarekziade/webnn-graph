@@ -1,7 +1,7 @@
 // Utility operators: Shape, Gather, Slice
 
 use crate::ast::Node;
-use crate::onnx::convert::OnnxError;
+use crate::onnx::convert::{sanitize_identifier, OnnxError};
 use crate::onnx::ops::{ConversionContext, OpHandler};
 use onnx::onnx::NodeProto;
 use serde_json::Map;
@@ -52,8 +52,10 @@ impl UtilityHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
+
+        let input0 = sanitize_identifier(&inputs[0].to_string());
 
         let options = Map::new();
 
@@ -62,7 +64,7 @@ impl UtilityHandler {
         Ok(vec![Node {
             id: output_name,
             op: "shape".to_string(),
-            inputs: vec![inputs[0].to_string()],
+            inputs: vec![input0],
             options,
             outputs: None,
         }])
@@ -90,8 +92,11 @@ impl UtilityHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
+
+        let input0 = sanitize_identifier(&inputs[0].to_string());
+        let input1 = sanitize_identifier(&inputs[1].to_string());
 
         let mut options = Map::new();
         options.insert("axis".to_string(), serde_json::json!(axis));
@@ -99,7 +104,7 @@ impl UtilityHandler {
         Ok(vec![Node {
             id: output_name,
             op: "gather".to_string(),
-            inputs: vec![inputs[0].to_string(), inputs[1].to_string()],
+            inputs: vec![input0, input1],
             options,
             outputs: None,
         }])
@@ -118,8 +123,10 @@ impl UtilityHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
+
+        let input0 = sanitize_identifier(&inputs[0].to_string());
 
         let mut options = Map::new();
 
@@ -127,22 +134,20 @@ impl UtilityHandler {
         // In older opsets, they're attributes
         if inputs.len() >= 3 {
             // starts, ends are required inputs (indices 1, 2)
-            options.insert(
-                "starts".to_string(),
-                serde_json::json!(inputs[1].to_string()),
-            );
-            options.insert("ends".to_string(), serde_json::json!(inputs[2].to_string()));
+            let input1 = sanitize_identifier(&inputs[1].to_string());
+            let input2 = sanitize_identifier(&inputs[2].to_string());
+            options.insert("starts".to_string(), serde_json::json!(input1));
+            options.insert("ends".to_string(), serde_json::json!(input2));
 
             if inputs.len() >= 4 {
                 // axes is optional input (index 3)
-                options.insert("axes".to_string(), serde_json::json!(inputs[3].to_string()));
+                let input3 = sanitize_identifier(&inputs[3].to_string());
+                options.insert("axes".to_string(), serde_json::json!(input3));
             }
             if inputs.len() >= 5 {
                 // steps is optional input (index 4)
-                options.insert(
-                    "steps".to_string(),
-                    serde_json::json!(inputs[4].to_string()),
-                );
+                let input4 = sanitize_identifier(&inputs[4].to_string());
+                options.insert("steps".to_string(), serde_json::json!(input4));
             }
         } else {
             // Extract from attributes (older opset)
@@ -180,7 +185,7 @@ impl UtilityHandler {
         Ok(vec![Node {
             id: output_name,
             op: "slice".to_string(),
-            inputs: vec![inputs[0].to_string()],
+            inputs: vec![input0],
             options,
             outputs: None,
         }])

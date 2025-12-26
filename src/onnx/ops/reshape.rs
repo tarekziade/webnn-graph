@@ -1,7 +1,7 @@
 // Reshape operators: Reshape, Transpose, Concat, Split, Unsqueeze, Squeeze
 
 use crate::ast::Node;
-use crate::onnx::convert::OnnxError;
+use crate::onnx::convert::{sanitize_identifier, OnnxError};
 use crate::onnx::ops::{ConversionContext, OpHandler};
 use onnx::onnx::NodeProto;
 use serde_json::Map;
@@ -59,22 +59,22 @@ impl ReshapeHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
+
+        let input0 = sanitize_identifier(&inputs[0].to_string());
+        let input1 = sanitize_identifier(&inputs[1].to_string());
 
         // In ONNX, shape is provided as a second input tensor
         // In WebNN, shape is an option parameter
         // For now, we'll pass the shape input name and note that it needs to be resolved
         let mut options = Map::new();
-        options.insert(
-            "newShape".to_string(),
-            serde_json::json!(inputs[1].to_string()),
-        );
+        options.insert("newShape".to_string(), serde_json::json!(input1));
 
         Ok(vec![Node {
             id: output_name,
             op: "reshape".to_string(),
-            inputs: vec![inputs[0].to_string()],
+            inputs: vec![input0],
             options,
             outputs: None,
         }])
@@ -101,8 +101,10 @@ impl ReshapeHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
+
+        let input0 = sanitize_identifier(&inputs[0].to_string());
 
         let mut options = Map::new();
         if let Some(perm_values) = perm {
@@ -112,7 +114,7 @@ impl ReshapeHandler {
         Ok(vec![Node {
             id: output_name,
             op: "transpose".to_string(),
-            inputs: vec![inputs[0].to_string()],
+            inputs: vec![input0],
             options,
             outputs: None,
         }])
@@ -139,8 +141,13 @@ impl ReshapeHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
+
+        let sanitized_inputs: Vec<String> = inputs
+            .iter()
+            .map(|s| sanitize_identifier(&s.to_string()))
+            .collect();
 
         let mut options = Map::new();
         options.insert("axis".to_string(), serde_json::json!(axis));
@@ -148,7 +155,7 @@ impl ReshapeHandler {
         Ok(vec![Node {
             id: output_name,
             op: "concat".to_string(),
-            inputs: inputs.iter().map(|s| s.to_string()).collect(),
+            inputs: sanitized_inputs,
             options,
             outputs: None,
         }])
@@ -188,6 +195,12 @@ impl ReshapeHandler {
             ));
         }
 
+        let input0 = sanitize_identifier(&inputs[0].to_string());
+        let sanitized_outputs: Vec<String> = outputs
+            .iter()
+            .map(|s| sanitize_identifier(&s.to_string()))
+            .collect();
+
         let mut options = Map::new();
         options.insert("axis".to_string(), serde_json::json!(axis));
         if let Some(split_values) = splits {
@@ -198,9 +211,9 @@ impl ReshapeHandler {
         Ok(vec![Node {
             id: format!("{}_split", node_name),
             op: "split".to_string(),
-            inputs: vec![inputs[0].to_string()],
+            inputs: vec![input0],
             options,
-            outputs: Some(outputs.iter().map(|s| s.to_string()).collect()),
+            outputs: Some(sanitized_outputs),
         }])
     }
 
@@ -226,8 +239,10 @@ impl ReshapeHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
+
+        let input0 = sanitize_identifier(&inputs[0].to_string());
 
         let mut options = Map::new();
 
@@ -236,14 +251,15 @@ impl ReshapeHandler {
             options.insert("axes".to_string(), serde_json::json!(axes_values));
         } else if inputs.len() >= 2 {
             // axes is provided as a second input (opset >= 13)
-            options.insert("axes".to_string(), serde_json::json!(inputs[1].to_string()));
+            let input1 = sanitize_identifier(&inputs[1].to_string());
+            options.insert("axes".to_string(), serde_json::json!(input1));
         }
 
         // WebNN doesn't have unsqueeze, so we'll use expand with axes parameter
         Ok(vec![Node {
             id: output_name,
             op: "expand".to_string(),
-            inputs: vec![inputs[0].to_string()],
+            inputs: vec![input0],
             options,
             outputs: None,
         }])
@@ -270,8 +286,10 @@ impl ReshapeHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
+
+        let input0 = sanitize_identifier(&inputs[0].to_string());
 
         let mut options = Map::new();
 
@@ -280,14 +298,15 @@ impl ReshapeHandler {
             options.insert("axes".to_string(), serde_json::json!(axes_values));
         } else if inputs.len() >= 2 {
             // axes is provided as a second input (opset >= 13)
-            options.insert("axes".to_string(), serde_json::json!(inputs[1].to_string()));
+            let input1 = sanitize_identifier(&inputs[1].to_string());
+            options.insert("axes".to_string(), serde_json::json!(input1));
         }
 
         // WebNN doesn't have squeeze, so we'll use reshape with axes parameter
         Ok(vec![Node {
             id: output_name,
             op: "reshape".to_string(),
-            inputs: vec![inputs[0].to_string()],
+            inputs: vec![input0],
             options,
             outputs: None,
         }])

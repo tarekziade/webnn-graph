@@ -1,7 +1,7 @@
 // Normalization operators: LayerNormalization, Softmax
 
 use crate::ast::Node;
-use crate::onnx::convert::OnnxError;
+use crate::onnx::convert::{sanitize_identifier, OnnxError};
 use crate::onnx::ops::{ConversionContext, OpHandler};
 use onnx::onnx::NodeProto;
 use serde_json::Map;
@@ -73,7 +73,7 @@ impl NormalizationHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
 
         let mut options = Map::new();
@@ -88,17 +88,19 @@ impl NormalizationHandler {
         // LayerNormalization can have scale and bias as inputs
         let webnn_inputs = if inputs.len() >= 3 {
             // Input, scale, bias
-            vec![
-                inputs[0].to_string(),
-                inputs[1].to_string(),
-                inputs[2].to_string(),
-            ]
+            let input0 = sanitize_identifier(&inputs[0].to_string());
+            let input1 = sanitize_identifier(&inputs[1].to_string());
+            let input2 = sanitize_identifier(&inputs[2].to_string());
+            vec![input0, input1, input2]
         } else if inputs.len() == 2 {
             // Input, scale
-            vec![inputs[0].to_string(), inputs[1].to_string()]
+            let input0 = sanitize_identifier(&inputs[0].to_string());
+            let input1 = sanitize_identifier(&inputs[1].to_string());
+            vec![input0, input1]
         } else {
             // Just input
-            vec![inputs[0].to_string()]
+            let input0 = sanitize_identifier(&inputs[0].to_string());
+            vec![input0]
         };
 
         Ok(vec![Node {
@@ -131,8 +133,10 @@ impl NormalizationHandler {
         let output_name = if node.get_output().is_empty() {
             format!("{}_output", node_name)
         } else {
-            node.get_output()[0].to_string()
+            sanitize_identifier(&node.get_output()[0].to_string())
         };
+
+        let input0 = sanitize_identifier(&inputs[0].to_string());
 
         let mut options = Map::new();
         // WebNN softmax uses axis parameter (single value)
@@ -141,7 +145,7 @@ impl NormalizationHandler {
         Ok(vec![Node {
             id: output_name,
             op: "softmax".to_string(),
-            inputs: vec![inputs[0].to_string()],
+            inputs: vec![input0],
             options,
             outputs: None,
         }])
