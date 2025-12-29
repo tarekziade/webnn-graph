@@ -16,8 +16,6 @@ operator mapping at a glance.
   Actual tensor bytes live in `model.weights` with offsets/types in `model.manifest.json`. Inline bytes are
   allowed for tiny scalars; everything else is referenced via `@weights("key")`.
 
----
-
 ## Why simplification is mandatory
 - **WebNN is static**: all tensor shapes must be fully known at build time.
 - **ONNX can be dynamic**: inputs often carry symbolic dims (e.g., `batch`, `seq_len`), and graphs may
@@ -25,7 +23,6 @@ operator mapping at a glance.
 - **Goal**: arrive at a graph where every tensor shape is concrete and every shape-producing expression is
   either folded to a constant or rejected early with a clear error.
 
----
 
 ## Two-phase lowering
 1) **Pre-simplify the ONNX graph to be static**
@@ -66,7 +63,6 @@ flowchart LR
     D --> G
 ```
 
----
 
 ## How dynamic constructs are handled
 - **Symbolic input dims**: must be resolved before lowering (overrides, defaults, or simplifier). If
@@ -104,12 +100,12 @@ flowchart LR
     A[X] --> B[Shape]
     B --> C[Gather]
     C --> D[Concat]
-    D --> E[Reshape X,newShape=tensor]
+    D --> E["Reshape X,newShape=tensor"]
     subgraph onnxsim
-      F[X] --> G[Reshape X,newShape=[1,128,12,32]]
+      F[X] --> G["Reshape X,newShape=[1,128,12,32]"]
     end
     subgraph webnn
-      H[reshape(X,[1,128,12,32])]
+      H["reshape(X,[1,128,12,32])"]
     end
   ```
 - **Slice with computed bounds**  
@@ -124,7 +120,7 @@ flowchart LR
     D[axes subgraph] --> B
     E[steps subgraph] --> B
     subgraph onnxsim
-      F[starts const] --> G[Slice(static)]
+      F[starts const] --> G["Slice(static)"]
       H[ends const] --> G
       I[axes const] --> G
       J[steps const] --> G
@@ -142,10 +138,10 @@ flowchart LR
   flowchart LR
     A[axes tensor] --> B[Unsqueeze]
     subgraph onnxsim
-      C[axes const] --> D[Unsqueeze axes=[1,3]]
+      C[axes const] --> D["Unsqueeze axes=[1,3]"]
     end
     subgraph webnn
-      E[unsqueeze axes=[1,3]]
+      E["unsqueeze axes=[1,3]"]
     end
   ```
 - **Gather for shape math**  
@@ -172,14 +168,14 @@ flowchart LR
     ops are needed.
   ```mermaid
   flowchart LR
-    A[X (static shape)] --> C[Add]
-    B[Y (static shape)] --> C
+    A["X (static shape)"] --> C[Add]
+    B["Y (static shape)"] --> C
     subgraph webnn
-      D[add(X,Y) with inferred broadcast]
+      D["add(X,Y) with inferred broadcast"]
     end
   ```
 
----
+ 
 
 ## Operator mapping (ONNX → WebNN)
 - **MatMul/Gemm**: `matmul` (plus optional transposes, alpha/beta scaling, and bias add for Gemm).
@@ -197,7 +193,7 @@ flowchart LR
 Unsupported ops (or ops with remaining dynamism) fail fast with an explicit “unsupported operator” or
 “WebNN requires static …” message to keep the pipeline predictable.
 
----
+ 
 
 ## End-to-end recipe (anchor example: `all-MiniLM-L6-v2-webnn`)
 1) **Simplify to static** (pin batch/seq and fold dynamic shape ops):
