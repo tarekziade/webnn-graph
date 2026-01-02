@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 pub mod activation;
 pub mod comparison;
+pub mod conditional;
 pub mod conversion;
 pub mod elementwise;
 pub mod matmul;
@@ -17,6 +18,7 @@ pub mod utility;
 
 use activation::ActivationHandler;
 use comparison::ComparisonHandler;
+use conditional::ConditionalHandler;
 use conversion::ConversionHandler;
 use elementwise::ElementwiseHandler;
 use matmul::MatMulHandler;
@@ -100,6 +102,7 @@ impl OpRegistry {
             Box::new(MatMulHandler),
             Box::new(ElementwiseHandler),
             Box::new(ComparisonHandler),
+            Box::new(ConditionalHandler),
             Box::new(NormalizationHandler),
             Box::new(ReshapeHandler),
             Box::new(ConversionHandler),

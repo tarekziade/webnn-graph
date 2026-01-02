@@ -1256,6 +1256,54 @@ impl OnnxConverter {
                             }
                         }
                     }
+                } else if op_type == "ConstantOfShape" {
+                    // ConstantOfShape(shape) -> tensor filled with constant value
+                    if let Some(shape_name) = node.get_input().first() {
+                        if let Some(shape_vals) = const_values.get(shape_name).cloned() {
+                            // Get the fill value from attributes (default is 0)
+                            let mut fill_value = 0i64;
+                            for attr in node.get_attribute() {
+                                if attr.get_name() == "value" && attr.has_t() {
+                                    let value_tensor = attr.get_t();
+                                    if value_tensor.get_data_type()
+                                        == onnx::onnx::TensorProto_DataType::INT64
+                                    {
+                                        let raw = value_tensor.get_raw_data();
+                                        if !raw.is_empty() && raw.len() >= 8 {
+                                            fill_value = i64::from_le_bytes([
+                                                raw[0], raw[1], raw[2], raw[3], raw[4], raw[5],
+                                                raw[6], raw[7],
+                                            ]);
+                                        } else if !value_tensor.get_int64_data().is_empty() {
+                                            fill_value = value_tensor.get_int64_data()[0];
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Calculate number of elements
+                            let numel = if shape_vals.is_empty() {
+                                1
+                            } else {
+                                shape_vals.iter().product::<i64>()
+                            };
+
+                            if numel > 0 && numel < 1_000_000 {
+                                // Reasonable size limit
+                                let filled_tensor = vec![fill_value; numel as usize];
+                                if let Some(out) = node.get_output().first() {
+                                    const_values.insert(out.to_string(), filled_tensor);
+                                    value_shapes
+                                        .entry(out.to_string())
+                                        .or_insert(shape_vals.clone());
+                                    value_shapes
+                                        .entry(sanitize_identifier(out))
+                                        .or_insert(shape_vals.clone());
+                                    value_types.insert(out.to_string(), DataType::Int64);
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

@@ -10,7 +10,10 @@ pub struct ElementwiseHandler;
 
 impl OpHandler for ElementwiseHandler {
     fn supports(&self, op_type: &str) -> bool {
-        matches!(op_type, "Add" | "Sub" | "Mul" | "Div" | "Pow")
+        matches!(
+            op_type,
+            "Add" | "Sub" | "Mul" | "Div" | "Pow" | "Min" | "Max"
+        )
     }
 
     fn convert(
@@ -51,6 +54,8 @@ impl OpHandler for ElementwiseHandler {
             "Mul" => "mul",
             "Div" => "div",
             "Pow" => "pow",
+            "Min" => "min",
+            "Max" => "max",
             _ => {
                 return Err(OnnxError::UnsupportedOp {
                     op: op_type.to_string(),
