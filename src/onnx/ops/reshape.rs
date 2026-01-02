@@ -12,7 +12,7 @@ impl OpHandler for ReshapeHandler {
     fn supports(&self, op_type: &str) -> bool {
         matches!(
             op_type,
-            "Reshape" | "Transpose" | "Concat" | "Split" | "Unsqueeze" | "Squeeze"
+            "Reshape" | "Transpose" | "Concat" | "Split" | "Unsqueeze" | "Squeeze" | "Tile"
         )
     }
 
@@ -35,6 +35,7 @@ impl OpHandler for ReshapeHandler {
             "Split" => self.convert_split(node, &node_name, context),
             "Unsqueeze" => self.convert_unsqueeze(node, &node_name, context),
             "Squeeze" => self.convert_squeeze(node, &node_name, context),
+            "Tile" => self.convert_tile(node, &node_name, context),
             _ => Err(OnnxError::UnsupportedOp {
                 op: op_type.to_string(),
                 node: node_name,
@@ -595,6 +596,98 @@ impl ReshapeHandler {
 
         Ok(result)
     }
+
+    /// Convert ONNX Tile to WebNN tile
+    /// Repeats the input tensor along each dimension according to the repeats input
+    fn convert_tile(
+        &self,
+        node: &NodeProto,
+        node_name: &str,
+        context: &ConversionContext,
+    ) -> Result<ConversionResult, OnnxError> {
+        let inputs = node.get_input();
+        if inputs.len() != 2 {
+            return Err(OnnxError::InvalidShape(format!(
+                "Tile expects 2 inputs (input, repeats), got {}",
+                inputs.len()
+            )));
+        }
+
+        let output_name = if node.get_output().is_empty() {
+            format!("{}_output", node_name)
+        } else {
+            sanitize_identifier(&node.get_output()[0].to_string())
+        };
+
+        let input0 = context.resolve_input(&inputs[0]);
+
+        // The repeats input must be a constant for WebNN
+        let repeats_name = inputs[1].as_str();
+
+        // Try to read repeats from const_values or initializers
+        let repeats = if let Some(vals) = context.const_values.get(repeats_name) {
+            vals.clone()
+        } else if let Some(tensor) = context.initializers.get(repeats_name) {
+            // Read from initializer
+            let raw = tensor.get_raw_data();
+            if !raw.is_empty() {
+                match tensor.get_data_type() {
+                    TensorProto_DataType::INT64 => raw
+                        .chunks_exact(8)
+                        .map(|c| {
+                            i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
+                        })
+                        .collect(),
+                    TensorProto_DataType::INT32 => raw
+                        .chunks_exact(4)
+                        .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as i64)
+                        .collect(),
+                    _ => {
+                        return Err(OnnxError::InvalidShape(
+                            "Tile repeats must be int32 or int64".to_string(),
+                        ))
+                    }
+                }
+            } else if !tensor.get_int64_data().is_empty() {
+                tensor.get_int64_data().to_vec()
+            } else if !tensor.get_int32_data().is_empty() {
+                tensor.get_int32_data().iter().map(|&v| v as i64).collect()
+            } else {
+                return Err(OnnxError::InvalidShape(
+                    "Tile repeats tensor has no data".to_string(),
+                ));
+            }
+        } else {
+            return Err(OnnxError::InvalidShape(
+                "Tile repeats must be constant for WebNN".to_string(),
+            ));
+        };
+
+        let mut options = Map::new();
+        options.insert("repetitions".to_string(), serde_json::json!(repeats));
+
+        let mut result = ConversionResult::new(vec![Node {
+            id: output_name.clone(),
+            op: "tile".to_string(),
+            inputs: vec![input0],
+            options,
+            outputs: None,
+        }]);
+
+        if let Some(output) = node.get_output().first() {
+            result
+                .output_mappings
+                .insert(output.to_string(), output_name.clone());
+            // Preserve data type
+            if let Some(dtype) = context.value_types.get(&inputs[0]) {
+                result
+                    .output_types
+                    .insert(output.to_string(), dtype.clone());
+            }
+        }
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -638,6 +731,7 @@ mod tests {
         assert!(handler.supports("Split"));
         assert!(handler.supports("Unsqueeze"));
         assert!(handler.supports("Squeeze"));
+        assert!(handler.supports("Tile"));
         assert!(!handler.supports("Add"));
     }
 
@@ -804,5 +898,44 @@ mod tests {
         assert_eq!(result.nodes[0].op, "reshape");
         assert_eq!(result.nodes[0].inputs, vec!["x"]);
         assert!(result.nodes[0].options.contains_key("axes"));
+    }
+
+    #[test]
+    fn test_convert_tile() {
+        let handler = ReshapeHandler;
+        let node = create_test_node("Tile", vec!["input", "repeats"], vec!["output"]);
+
+        // Create a mock repeats tensor [2, 3]
+        let mut repeats_tensor = onnx::onnx::TensorProto::new();
+        repeats_tensor.set_name("repeats".to_string());
+        repeats_tensor.set_data_type(onnx::onnx::TensorProto_DataType::INT64);
+        repeats_tensor.set_dims(vec![2]);
+        repeats_tensor.set_int64_data(vec![2, 3]);
+
+        let leaked_repeats: &'static onnx::onnx::TensorProto = Box::leak(Box::new(repeats_tensor));
+
+        let mut initializers = std::collections::HashMap::new();
+        initializers.insert("repeats".to_string(), leaked_repeats);
+        let value_shapes = std::collections::HashMap::new();
+        let const_values = std::collections::HashMap::new();
+        let value_ids = std::collections::HashMap::new();
+        let value_types = std::collections::HashMap::new();
+        let context = ConversionContext {
+            initializers: &initializers,
+            value_shapes: &value_shapes,
+            const_values: &const_values,
+            value_ids: &value_ids,
+            value_types: &value_types,
+        };
+
+        let result = handler.convert(&node, &context).unwrap();
+        assert_eq!(result.nodes.len(), 1);
+        assert_eq!(result.nodes[0].op, "tile");
+        assert_eq!(result.nodes[0].inputs, vec!["input"]);
+        assert!(result.nodes[0].options.contains_key("repetitions"));
+
+        // Verify the repetitions value
+        let repetitions = result.nodes[0].options.get("repetitions").unwrap();
+        assert_eq!(repetitions, &serde_json::json!([2, 3]));
     }
 }
