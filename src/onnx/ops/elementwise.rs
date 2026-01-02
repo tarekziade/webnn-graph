@@ -108,6 +108,8 @@ mod tests {
         assert!(handler.supports("Mul"));
         assert!(handler.supports("Div"));
         assert!(handler.supports("Pow"));
+        assert!(handler.supports("Min"));
+        assert!(handler.supports("Max"));
         assert!(!handler.supports("MatMul"));
     }
 
@@ -178,5 +180,51 @@ mod tests {
         let result = handler.convert(&node, &context).unwrap();
         assert_eq!(result.nodes.len(), 1);
         assert_eq!(result.nodes[0].op, "div");
+    }
+
+    #[test]
+    fn test_convert_min() {
+        let handler = ElementwiseHandler;
+        let node = create_test_node("Min", vec!["x", "y"], vec!["z"]);
+        let initializers = std::collections::HashMap::new();
+        let value_shapes = std::collections::HashMap::new();
+        let const_values = std::collections::HashMap::new();
+        let value_ids = std::collections::HashMap::new();
+        let value_types = std::collections::HashMap::new();
+        let context = ConversionContext {
+            initializers: &initializers,
+            value_shapes: &value_shapes,
+            const_values: &const_values,
+            value_ids: &value_ids,
+            value_types: &value_types,
+        };
+
+        let result = handler.convert(&node, &context).unwrap();
+        assert_eq!(result.nodes.len(), 1);
+        assert_eq!(result.nodes[0].op, "min");
+        assert_eq!(result.nodes[0].inputs, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn test_convert_max() {
+        let handler = ElementwiseHandler;
+        let node = create_test_node("Max", vec!["a", "b"], vec!["c"]);
+        let initializers = std::collections::HashMap::new();
+        let value_shapes = std::collections::HashMap::new();
+        let const_values = std::collections::HashMap::new();
+        let value_ids = std::collections::HashMap::new();
+        let value_types = std::collections::HashMap::new();
+        let context = ConversionContext {
+            initializers: &initializers,
+            value_shapes: &value_shapes,
+            const_values: &const_values,
+            value_ids: &value_ids,
+            value_types: &value_types,
+        };
+
+        let result = handler.convert(&node, &context).unwrap();
+        assert_eq!(result.nodes.len(), 1);
+        assert_eq!(result.nodes[0].op, "max");
+        assert_eq!(result.nodes[0].inputs, vec!["a", "b"]);
     }
 }
