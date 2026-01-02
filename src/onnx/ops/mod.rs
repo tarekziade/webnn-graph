@@ -6,6 +6,7 @@ use onnx::onnx::{NodeProto, TensorProto};
 use std::collections::HashMap;
 
 pub mod activation;
+pub mod comparison;
 pub mod conversion;
 pub mod elementwise;
 pub mod matmul;
@@ -15,6 +16,7 @@ pub mod reshape;
 pub mod utility;
 
 use activation::ActivationHandler;
+use comparison::ComparisonHandler;
 use conversion::ConversionHandler;
 use elementwise::ElementwiseHandler;
 use matmul::MatMulHandler;
@@ -97,6 +99,7 @@ impl OpRegistry {
         let handlers: Vec<Box<dyn OpHandler>> = vec![
             Box::new(MatMulHandler),
             Box::new(ElementwiseHandler),
+            Box::new(ComparisonHandler),
             Box::new(NormalizationHandler),
             Box::new(ReshapeHandler),
             Box::new(ConversionHandler),
