@@ -1,5 +1,6 @@
 // ONNX to WebNN conversion module
 
+pub mod constant_folding;
 pub mod convert;
 pub mod ir;
 pub mod ops;

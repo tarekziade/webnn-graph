@@ -37,9 +37,6 @@ pub enum OnnxError {
 
     #[error("shape inference failed for node: {0}")]
     ShapeInference(String),
-
-    #[error("onnxsim failed: {0}")]
-    OnnxSim(String),
 }
 
 /// Sanitize ONNX identifiers for WebNN DSL compatibility
@@ -1370,8 +1367,17 @@ pub fn convert_onnx<P: AsRef<Path>>(
     let onnx_bytes = fs::read(onnx_path_ref)?;
 
     // Parse protobuf
-    let model: ModelProto = protobuf::parse_from_bytes(&onnx_bytes)
+    let mut model: ModelProto = protobuf::parse_from_bytes(&onnx_bytes)
         .map_err(|e| OnnxError::ProtobufError(e.to_string()))?;
+
+    // Apply constant folding if optimize flag is set
+    if options.optimize {
+        eprintln!("Running constant folding...");
+        let evaluators = crate::onnx::constant_folding::evaluators::get_evaluators();
+        let nodes_folded =
+            crate::onnx::constant_folding::fold_constants_in_model(&mut model, &evaluators)?;
+        eprintln!("Constant folding: {} nodes folded", nodes_folded);
+    }
 
     // Merge overrides from sidecar dims file if provided implicitly and not already set
     if options.free_dim_overrides.is_empty() {

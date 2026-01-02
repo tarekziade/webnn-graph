@@ -214,39 +214,32 @@ To add your own weights:
 
 If you have an existing ONNX model, you can convert it to WebNN format. This is especially useful for transformer models like BERT.
 
-### Prerequisites
+### Built-in Constant Folding
 
-Install `onnx-simplifier` to preprocess your ONNX models:
-
-```bash
-pip install onnxsim
-```
+The converter includes built-in constant folding (enabled with `--optimize`) that automatically handles dynamic shape patterns. No external preprocessing needed!
 
 ### Step-by-Step Example
 
 ```bash
-# Step 1: Simplify your ONNX model with static shapes (REQUIRED!)
-# This removes dynamic Shape operations that WebNN doesn't support
-onnxsim your-model.onnx your-model-static.onnx \
-  --overwrite-input-shape input_ids:1,128 attention_mask:1,128
-
-# Step 2: Convert ONNX to WebNN
-cargo run -- convert-onnx --input your-model-static.onnx
+# Step 1: Convert ONNX to WebNN with constant folding
+cargo run -- convert-onnx --input your-model.onnx --optimize \
+  --override-dim batch_size=1 \
+  --override-dim sequence_length=128
 
 # This creates three files:
-# - your-model-static.webnn (graph structure)
-# - your-model-static.weights (binary weights)
-# - your-model-static.manifest.json (weights metadata)
+# - your-model.webnn (graph structure)
+# - your-model.weights (binary weights)
+# - your-model.manifest.json (weights metadata)
 
-# Step 3: Generate JavaScript
-cargo run -- emit-js your-model-static.webnn > your-model.js
+# Step 2: Generate JavaScript
+cargo run -- emit-js your-model.webnn > your-model.js
 
-# Step 4: Create an interactive visualizer
-cargo run -- emit-html your-model-static.webnn > visualizer.html
+# Step 3: Create an interactive visualizer
+cargo run -- emit-html your-model.webnn > visualizer.html
 open visualizer.html
 ```
 
-### Why Simplification is Required
+### How Constant Folding Works
 
 WebNN doesn't support dynamic shapes. ONNX models (especially transformers) often use patterns like:
 
@@ -254,15 +247,17 @@ WebNN doesn't support dynamic shapes. ONNX models (especially transformers) ofte
 Shape → Gather → Concat → Reshape
 ```
 
-These compute shapes at runtime. `onnx-simplifier` resolves these to static constants:
+The `--optimize` flag automatically evaluates these patterns at conversion time:
 
 - ✅ Before: `Shape` operation computes dimensions dynamically
 - ✅ After: Reshape uses constant `[1, 128, 768]` directly
 
-**Results for BERT models:**
+**Results for BERT models with `--optimize`:**
 - Original: ~637 nodes with Shape operations
-- Simplified: ~317 nodes (50% reduction)
+- After constant folding: ~317 nodes (50% reduction)
 - All reshape operations use static constants
+
+**See also:** [Dynamic Dimensions Guide](../docs/dynamic-dimensions-guide.md) for help choosing dimension override values.
 
 ### Using the Converted Model
 
@@ -270,8 +265,8 @@ The converted WebNN model can be used just like the manual examples:
 
 ```javascript
 // Load the converted model
-const weights = await WeightsFile.load('your-model-static.weights',
-                                        'your-model-static.manifest.json');
+const weights = await WeightsFile.load('your-model.weights',
+                                        'your-model.manifest.json');
 const context = await navigator.ml.createContext();
 const graph = await buildGraph(context, weights);
 

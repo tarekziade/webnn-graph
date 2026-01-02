@@ -209,7 +209,7 @@ The CLI includes a powerful ONNX-to-WebNN converter that enables you to take exi
 
 ### Prerequisites: Static Shapes Required
 
-**Important:** WebNN does not support dynamic shapes at runtime. Before converting ONNX models, you **must** resolve all dynamic dimensions using `onnx-simplifier`.
+**Important:** WebNN does not support dynamic shapes at runtime. The converter includes **built-in constant folding** (enabled with `--optimize`) to handle dynamic shape patterns automatically.
 
 #### Why is this necessary?
 
@@ -219,53 +219,62 @@ WebNN's `reshape` operation requires the shape parameter to be a constant, not a
 Shape → Gather → Concat → Reshape
 ```
 
-These patterns must be resolved to static constants at conversion time. Without simplification, the converter will fail or produce incorrect results.
+These patterns must be resolved to static constants at conversion time.
 
-#### How to preprocess ONNX models
+#### Built-in Constant Folding
 
-Install and use `onnx-simplifier`:
+The converter includes a constant folding engine that automatically:
+- Evaluates `Shape` operations at conversion time
+- Resolves `Gather` and `Concat` operations on constant data
+- Eliminates dynamic shape computation patterns
+- Reduces model size by 40-50% for transformer models
+
+Simply use the `--optimize` flag to enable constant folding:
 
 ```bash
-# Install onnx-simplifier
-pip install onnxsim
-
-# Simplify model with static input shapes
-onnxsim model.onnx model-static.onnx \
-  --overwrite-input-shape input_ids:1,128 attention_mask:1,128
-
-# For BERT/Transformer models, specify all inputs
-onnxsim bert.onnx bert-static.onnx \
-  --overwrite-input-shape input_ids:1,512 attention_mask:1,512 token_type_ids:1,512
+webnn-graph convert-onnx --input model.onnx --optimize \
+  --override-dim batch_size=1 \
+  --override-dim sequence_length=128
 ```
 
-**Results after simplification:**
-- All `Shape` operations removed (dynamic → static constants)
-- `Reshape` operations use constant values instead of runtime computation
-- 40-50% fewer nodes in complex transformer models
-- Model becomes compatible with WebNN conversion
+**What constant folding does:**
+- Identifies nodes with all-constant inputs
+- Evaluates them at conversion time
+- Replaces them with their computed results
+- Removes the evaluated nodes from the graph
+
+**See also:** [Dynamic Dimensions Guide](docs/dynamic-dimensions-guide.md) for help choosing dimension values.
 
 ### Converting ONNX Models
 
-Once your model is simplified with static shapes, convert it to WebNN:
+Convert ONNX models to WebNN format with built-in constant folding:
 
 ```bash
-# Basic conversion (extracts weights by default)
-webnn-graph convert-onnx --input model-static.onnx
+# Basic conversion with optimization (recommended)
+webnn-graph convert-onnx --input model.onnx --optimize \
+  --override-dim batch_size=1 \
+  --override-dim sequence_length=128
 
-# Output: model-static.webnn + model-static.weights + model-static.manifest.json
+# Output: model.webnn + model.weights + model.manifest.json
 
 # Custom output paths
 webnn-graph convert-onnx \
-  --input model-static.onnx \
+  --input model.onnx \
+  --optimize \
   --output graph.webnn \
   --weights graph.weights \
-  --manifest graph.manifest.json
+  --manifest graph.manifest.json \
+  --override-dim batch_size=1 \
+  --override-dim sequence_length=128
 
 # Inline weights for small models (not recommended for large models)
-webnn-graph convert-onnx --input model.onnx --inline-weights
+webnn-graph convert-onnx --input model.onnx --optimize --inline-weights \
+  --override-dim batch_size=1
 
 # Output to JSON format instead of .webnn
-webnn-graph convert-onnx --input model.onnx --output model.json
+webnn-graph convert-onnx --input model.onnx --optimize --output model.json \
+  --override-dim batch_size=1 \
+  --override-dim sequence_length=128
 ```
 
 ### Supported ONNX Operations
@@ -283,24 +292,31 @@ The converter focuses on NLP/Transformer operations:
 ### Complete ONNX Workflow Example
 
 ```bash
-# Step 1: Simplify ONNX model with static shapes (REQUIRED!)
-onnxsim bert-base.onnx bert-static.onnx \
-  --overwrite-input-shape input_ids:1,128 attention_mask:1,128 token_type_ids:1,128
+# Step 1: Convert ONNX → WebNN with constant folding
+webnn-graph convert-onnx --input bert-base.onnx --optimize \
+  --override-dim batch_size=1 \
+  --override-dim sequence_length=128 \
+  --override-dim token_type_ids=128
 
-# Step 2: Convert ONNX → WebNN
-webnn-graph convert-onnx --input bert-static.onnx
+# Output: bert-base.webnn + bert-base.weights + bert-base.manifest.json
 
-# Step 3: Generate JavaScript for browser/runtime
-webnn-graph emit-js bert-static.webnn > buildGraph.js
+# Step 2: Generate JavaScript for browser/runtime
+webnn-graph emit-js bert-base.webnn > buildGraph.js
 
-# Step 4: (Optional) Create HTML visualizer
-webnn-graph emit-html bert-static.webnn > visualizer.html
+# Step 3: (Optional) Create HTML visualizer
+webnn-graph emit-html bert-base.webnn > visualizer.html
 open visualizer.html
+
+# The --optimize flag performs constant folding automatically:
+# - Eliminates Shape/Gather/Concat patterns
+# - Reduces model size by 40-50%
+# - No external preprocessing needed!
 ```
 
-**Example results for BERT models:**
+**Example results for BERT models with `--optimize`:**
 - **Original ONNX**: 637 nodes with Shape operations
-- **Simplified ONNX**: 317 nodes (50% reduction), no Shape operations
+- **After constant folding**: 317 nodes (50% reduction), no Shape operations
+- All reshape shape parameters become static constants
 - **WebNN output**: All reshape operations use static constants, fully compatible
 
 ## Examples

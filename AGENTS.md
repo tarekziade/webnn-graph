@@ -118,77 +118,75 @@ webnn-graph parse model.webnn | webnn-graph serialize /dev/stdin > model_copy.we
 
 ### ONNX Conversion
 
-**Prerequisites: Static Shapes Required**
+**Built-in Constant Folding**
 
-WebNN does not support dynamic shapes at runtime. Before converting ONNX models, you must:
-
-1. **Resolve all dynamic dimensions** using onnx-simplifier:
-```bash
-# Install onnx-simplifier
-pip install onnxsim
-
-# Simplify model with static input shapes
-onnxsim model.onnx model-static.onnx \
-  --overwrite-input-shape input_ids:1,128 attention_mask:1,128
-
-# For BERT/Transformer models, set batch_size and sequence_length
-onnxsim bert.onnx bert-static.onnx \
-  --overwrite-input-shape input_ids:1,512 attention_mask:1,512 token_type_ids:1,512
-```
-
-This eliminates Shape, Gather, Concat operations that WebNN cannot support. The simplified model will have:
-- All Shape operations removed (dynamic → static constants)
-- Reshape operations using constant values instead of runtime computation
-- 40-50% fewer nodes in complex transformer models
+The converter includes built-in constant folding (enabled with `--optimize`) that automatically handles dynamic
+shape patterns. WebNN does not support dynamic shapes at runtime, so the converter resolves all dynamic dimensions
+at conversion time.
 
 **Why this is necessary**: WebNN's `reshape` operation requires the shape parameter to be a constant, not a
 dynamically computed value. ONNX models with dynamic shapes use `Shape→Gather→Concat→Reshape` patterns that
 must be resolved to static constants at conversion time.
 
-Convert ONNX models to WebNN format:
+Convert ONNX models to WebNN format with constant folding:
 ```bash
-# Basic conversion (extracts weights by default)
-webnn-graph convert-onnx --input model.onnx
+# Basic conversion with optimization (recommended)
+webnn-graph convert-onnx --input model.onnx --optimize \
+  --override-dim batch_size=1 \
+  --override-dim sequence_length=128
 
 # Output: model.webnn + model.weights + model.manifest.json
 
 # Custom output paths
 webnn-graph convert-onnx \
   --input model.onnx \
+  --optimize \
   --output graph.webnn \
   --weights graph.weights \
-  --manifest graph.manifest.json
+  --manifest graph.manifest.json \
+  --override-dim batch_size=1 \
+  --override-dim sequence_length=128
 
 # Inline weights for small models
-webnn-graph convert-onnx --input model.onnx --inline-weights
+webnn-graph convert-onnx --input model.onnx --optimize --inline-weights \
+  --override-dim batch_size=1
 
 # Output to JSON format
-webnn-graph convert-onnx --input model.onnx --output model.json
+webnn-graph convert-onnx --input model.onnx --optimize --output model.json \
+  --override-dim batch_size=1 \
+  --override-dim sequence_length=128
 ```
+
+The `--optimize` flag performs constant folding, which:
+- Evaluates Shape, Gather, Concat operations at conversion time
+- Eliminates dynamic shape computation patterns
+- Reduces model size by 40-50% for transformer models
+- Makes all reshape operations use static constants
 
 **Supported operators** (NLP/Transformer focused):
 - **MatMul, Gemm**: Matrix multiplication with options
 - **Add, Sub, Mul, Div, Pow**: Element-wise operations
 - **LayerNormalization, Softmax**: Normalization operations
 - **Reshape, Transpose, Concat, Split**: Tensor manipulation
+- **Constant folding**: Shape, Gather, Concat, Unsqueeze, Squeeze, Cast, Constant
 
 **Full pipeline example**:
 ```bash
-# Step 1: Simplify ONNX model with static shapes (REQUIRED for transformers!)
-onnxsim model.onnx model-static.onnx \
-  --overwrite-input-shape input_ids:1,128 attention_mask:1,128
+# Step 1: Convert ONNX → WebNN with constant folding
+webnn-graph convert-onnx --input bert-base.onnx --optimize \
+  --override-dim batch_size=1 \
+  --override-dim sequence_length=128
 
-# Step 2: Convert ONNX → WebNN
-webnn-graph convert-onnx --input model-static.onnx
+# Step 2: Generate JavaScript
+webnn-graph emit-js bert-base.webnn > buildGraph.js
 
-# Step 3: Generate JavaScript
-webnn-graph emit-js model-static.webnn > buildGraph.js
-
-# Example results for BERT models:
+# Example results for BERT models with --optimize:
 # - Original: 637 nodes with Shape operations
-# - Simplified: 317 nodes (50% reduction), no Shape operations
+# - After constant folding: 317 nodes (50% reduction), no Shape operations
 # - All reshape operations use static constants
 ```
+
+**See also**: [Dynamic Dimensions Guide](docs/dynamic-dimensions-guide.md) for help choosing dimension override values.
 
 ### Weights Management
 

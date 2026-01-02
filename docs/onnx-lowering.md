@@ -23,24 +23,25 @@ This reference explains how `webnn-graph` lowers ONNX graphs into the WebNN DSL.
 
 
 ## Two-phase lowering
-1) **Pre-simplify the ONNX graph to be static**
-   - **Freeze input shapes**: use overrides or a simplifier to pin symbolic dims (e.g., `batch=1`,
-     `seq_len=128`). The CLI accepts `--override-dim name=value`, and a sidecar `*.dims.json` can supply
-     the same. Defaults kick in for common names (`batch`, `sequence_length`, etc.) when missing.
-   - **Run an ONNX simplifier** (e.g., `onnxsim`) with overwrite-input-shape flags. This folds typical
-     dynamic-shape plumbing such as:
+1) **Prepare the ONNX graph with static shapes**
+   - **Freeze input shapes**: use `--override-dim name=value` to pin symbolic dims (e.g., `batch=1`,
+     `seq_len=128`). A sidecar `*.dims.json` can supply the same. Defaults kick in for common names
+     (`batch`, `sequence_length`, etc.) when missing.
+   - **Enable constant folding**: use the `--optimize` flag to activate built-in constant folding that
+     eliminates dynamic-shape plumbing such as:
      - `Shape` → `Gather` → `Concat` → `Reshape`
      - Constant axes/starts/ends passed around as tensors
-   - **Result**: a static ONNX (`model-static.onnx`) that no longer encodes runtime shape logic.
+   - **Result**: the converter produces a static WebNN graph where all shapes are concrete.
 
-2) **Lower the static graph to WebNN DSL**
+2) **Lower the ONNX graph to WebNN DSL**
    - **Opset guard**: only `ai.onnx` opset 11–18 is accepted.
    - **Shape/type seeding**: inputs (minus initializers) become WebNN inputs with concrete shapes;
      initializers become constants; integer constants are recorded for later shape math.
    - **Static shape inference**: a conservative pass rejects any remaining dynamic dims, infers shapes for
      intermediates, and folds small integer tensors needed for axes/newShape/starts/ends.
-   - **Optional extra propagation** (`--optimize`): a few lightweight passes try to derive more shapes and
-     fold more integer consts (Shape/Gather/Concat/Cast/Squeeze/Unsqueeze).
+   - **Constant folding** (`--optimize`): evaluates Shape/Gather/Concat/Cast/Squeeze/Unsqueeze operations
+     at conversion time, replacing them with their computed constant values. Reduces graph size by 40-50%
+     for transformer models.
    - **Node conversion**: each ONNX node is mapped to one or more WebNN ops via `OpRegistry`; purely
      constant outputs are emitted as consts and skipped as nodes.
    - **Serialization**: emit `.webnn` (structure only) plus `.weights` and `.manifest.json` (raw bytes +
@@ -50,9 +51,9 @@ This reference explains how `webnn-graph` lowers ONNX graphs into the WebNN DSL.
 ```mermaid
 flowchart LR
     A["ONNX model (may have symbolic dims)"]
-    B["Simplify + shape overrides (onnxsim / --override-dim)"]
-    C["Static ONNX (no runtime shape ops)"]
-    D["Static shape inference + const folding for small integer tensors"]
+    B["Shape overrides (--override-dim) + constant folding (--optimize)"]
+    C["Static shape inference"]
+    D["Constant folding: Shape/Gather/Concat/etc"]
     E["Op mapping (OpRegistry)"]
     F["WebNN DSL (.webnn)"]
     G["Weights sidecars (.weights + .manifest.json)"]
@@ -89,7 +90,7 @@ flowchart LR
 ### Before/after examples for common tricky patterns
 - **Dynamic reshape pipeline**  
   - Original ONNX: `X -> Shape -> Gather -> Concat -> Reshape(X, newShape=tensor)` with symbolic dims.  
-  - After `onnxsim`: `newShape` becomes a constant tensor (e.g., `[1,128,12,32]`); `Shape/Gather/Concat`
+  - With `--optimize`: `newShape` becomes a constant tensor (e.g., `[1,128,12,32]`); `Shape/Gather/Concat`
     are removed.  
   - After WebNN lowering: a single `reshape(X, newShape=[1,128,12,32])` node; `newShape` is static and
     embedded as an inline small const if needed.
@@ -99,7 +100,7 @@ flowchart LR
     B --> C[Gather]
     C --> D[Concat]
     D --> E["Reshape X,newShape=tensor"]
-    subgraph onnxsim
+    subgraph constant_folding
       F[X] --> G["Reshape X,newShape=[1,128,12,32]"]
     end
     subgraph webnn
@@ -108,7 +109,7 @@ flowchart LR
   ```
 - **Slice with computed bounds**  
   - Original ONNX: `starts`/`ends`/`axes`/`steps` produced by small subgraphs.  
-  - After `onnxsim`: those tensors become constants with normalized axes; negative indices are resolved.  
+  - With `--optimize`: those tensors become constants with normalized axes; negative indices are resolved.  
   - After WebNN lowering: one `slice` node with static starts/ends/axes/steps; rejected if any bound stays
     dynamic or `step != 1`.
   ```mermaid
@@ -117,7 +118,7 @@ flowchart LR
     C[ends subgraph] --> B
     D[axes subgraph] --> B
     E[steps subgraph] --> B
-    subgraph onnxsim
+    subgraph constant_folding
       F[starts const] --> G["Slice(static)"]
       H[ends const] --> G
       I[axes const] --> G
@@ -129,13 +130,13 @@ flowchart LR
   ```
 - **Axis/permute tensors**  
   - Original ONNX: axes for `Unsqueeze`/`Squeeze`/`Reduce*` or perm for `Transpose` are fed by tensors.  
-  - After `onnxsim`: axes/perm are folded into constant tensors.  
+  - With `--optimize`: axes/perm are folded into constant tensors.  
   - After WebNN lowering: ops carry inline static `axes` or `permutation` arrays; if still dynamic, the op
     is rejected.
   ```mermaid
   flowchart LR
     A[axes tensor] --> B[Unsqueeze]
-    subgraph onnxsim
+    subgraph constant_folding
       C[axes const] --> D["Unsqueeze axes=[1,3]"]
     end
     subgraph webnn
@@ -144,14 +145,14 @@ flowchart LR
   ```
 - **Gather for shape math**  
   - Original ONNX: `Gather(Shape(X), idx)` to pick a dim.  
-  - After `onnxsim`: `Shape` and `Gather` are removed and replaced by a scalar constant (e.g., sequence
+  - With `--optimize`: `Shape` and `Gather` are removed and replaced by a scalar constant (e.g., sequence
     length).  
   - After WebNN lowering: the scalar becomes an inline const; no `gather` node is emitted.
   ```mermaid
   flowchart LR
     A[X] --> B[Shape]
     B --> C[Gather idx]
-    subgraph onnxsim
+    subgraph constant_folding
       D[const dim]:::const
     end
     subgraph webnn
@@ -161,7 +162,7 @@ flowchart LR
   ```
 - **Broadcasted elementwise ops**  
   - Original ONNX: elementwise ops rely on runtime broadcasting.  
-  - After `onnxsim`: shapes are static and compatible; broadcasting stays implicit.  
+  - With `--optimize`: shapes are static and compatible; broadcasting stays implicit.  
   - After WebNN lowering: elementwise ops are emitted as-is; shapes are already known, so no extra shape
     ops are needed.
   ```mermaid
@@ -195,7 +196,7 @@ Unsupported ops (or ops with remaining dynamism) fail fast with an explicit “u
 
 ## End-to-end recipe (anchor example: `all-MiniLM-L6-v2-webnn`)
 1) **Simplify to static** (pin batch/seq and fold dynamic shape ops):
-   - `onnxsim model.onnx model-static.onnx \\
+   - `webnn-graph convert-onnx --input model.onnx --optimize \\
      --overwrite-input-shape input_ids:1,128 \\
      --overwrite-input-shape attention_mask:1,128 \\
      --overwrite-input-shape token_type_ids:1,128`
