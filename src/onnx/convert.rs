@@ -42,7 +42,7 @@ pub enum OnnxError {
 /// Sanitize ONNX identifiers for WebNN DSL compatibility
 /// Replaces problematic characters that would confuse the parser
 pub fn sanitize_identifier(name: &str) -> String {
-    name.replace("::", "__").replace(':', "_")
+    name.replace("::", "__").replace([':', '.'], "_")
 }
 
 /// Infer output shape for an ONNX node based on its operation type and inputs
@@ -1360,8 +1360,43 @@ impl OnnxConverter {
                         }
                     }
                 }
-                // For non-scalar constants (like Range output), skip the node entirely
-                // The constant values are already in const_values and will be handled later
+                // For non-scalar constants (like Range output), emit inline consts so downstream
+                // nodes have a defined producer.
+                for out in outputs {
+                    if let Some(values) = const_values.get(out) {
+                        let const_name = sanitize_identifier(out);
+                        let shape = value_shapes
+                            .get(out.as_str())
+                            .cloned()
+                            .unwrap_or_else(|| vec![values.len() as i64]);
+                        let dtype = value_types
+                            .get(out.as_str())
+                            .cloned()
+                            .unwrap_or(DataType::Int64);
+
+                        // Flatten i64 values into little-endian bytes
+                        let mut bytes = Vec::with_capacity(values.len() * 8);
+                        for v in values {
+                            bytes.extend_from_slice(&v.to_le_bytes());
+                        }
+
+                        let decl = crate::ast::ConstDecl {
+                            data_type: dtype.clone(),
+                            shape: shape.iter().map(|d| *d as u32).collect(),
+                            init: crate::ast::ConstInit::InlineBytes { bytes },
+                        };
+
+                        let existing = self.graph.consts.get(&const_name).cloned();
+                        if existing.is_none() {
+                            self.graph.consts.insert(const_name.clone(), decl);
+                        }
+
+                        value_name_map.insert(out.to_string(), const_name.clone());
+                        value_name_map.insert(const_name.clone(), const_name.clone());
+                        value_types.insert(out.to_string(), dtype.clone());
+                        value_types.insert(const_name, dtype);
+                    }
+                }
                 continue;
             }
 
@@ -1596,5 +1631,114 @@ mod tests {
         let options = ConvertOptions::default();
         assert!(options.extract_weights);
         assert_eq!(options.output_path, "output.webnn");
+    }
+
+    #[test]
+    fn test_sanitize_identifier_replaces_colons() {
+        assert_eq!(sanitize_identifier("foo::bar"), "foo__bar");
+        assert_eq!(sanitize_identifier("foo:bar"), "foo_bar");
+    }
+
+    #[test]
+    fn test_sanitize_identifier_replaces_dots() {
+        assert_eq!(sanitize_identifier("encoder.block.0"), "encoder_block_0");
+        assert_eq!(
+            sanitize_identifier("model.layer.weight"),
+            "model_layer_weight"
+        );
+        assert_eq!(sanitize_identifier("a.b.c"), "a_b_c");
+    }
+
+    #[test]
+    fn test_sanitize_identifier_replaces_combined() {
+        // Test combinations of :: : and .
+        assert_eq!(
+            sanitize_identifier("module::class:method.field"),
+            "module__class_method_field"
+        );
+        assert_eq!(
+            sanitize_identifier("encoder.attention::output:dense"),
+            "encoder_attention__output_dense"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_identifier_no_change() {
+        // Identifiers that don't need sanitization
+        assert_eq!(sanitize_identifier("simple_name"), "simple_name");
+        assert_eq!(sanitize_identifier("CamelCase"), "CamelCase");
+        assert_eq!(sanitize_identifier("name123"), "name123");
+    }
+
+    #[test]
+    fn test_inline_bytes_encoding_for_i64_values() {
+        // Test the inline bytes encoding logic used for non-scalar constants
+        // This simulates what happens when Range or similar ops produce constant arrays
+        let values: Vec<i64> = vec![0, 1, 2, 3, 4];
+        let mut bytes = Vec::with_capacity(values.len() * 8);
+        for v in values {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+
+        // Verify byte length
+        assert_eq!(bytes.len(), 40); // 5 values * 8 bytes each
+
+        // Verify first value (0)
+        let first_bytes: [u8; 8] = bytes[0..8].try_into().unwrap();
+        assert_eq!(i64::from_le_bytes(first_bytes), 0);
+
+        // Verify last value (4)
+        let last_bytes: [u8; 8] = bytes[32..40].try_into().unwrap();
+        assert_eq!(i64::from_le_bytes(last_bytes), 4);
+    }
+
+    #[test]
+    fn test_inline_bytes_encoding_single_value() {
+        // Test single value encoding
+        let values: Vec<i64> = vec![42];
+        let mut bytes = Vec::with_capacity(values.len() * 8);
+        for v in values {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+
+        assert_eq!(bytes.len(), 8);
+        let decoded: [u8; 8] = bytes.try_into().unwrap();
+        assert_eq!(i64::from_le_bytes(decoded), 42);
+    }
+
+    #[test]
+    fn test_inline_bytes_encoding_negative_values() {
+        // Test with negative values (important for Range with negative delta)
+        let values: Vec<i64> = vec![5, 4, 3, 2, 1, 0, -1, -2];
+        let mut bytes = Vec::with_capacity(values.len() * 8);
+        for v in values {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+
+        assert_eq!(bytes.len(), 64); // 8 values * 8 bytes each
+
+        // Verify a negative value
+        let neg_bytes: [u8; 8] = bytes[56..64].try_into().unwrap();
+        assert_eq!(i64::from_le_bytes(neg_bytes), -2);
+    }
+
+    #[test]
+    fn test_inline_bytes_encoding_large_values() {
+        // Test with large i64 values
+        let values: Vec<i64> = vec![i64::MAX, i64::MIN, 0];
+        let mut bytes = Vec::with_capacity(values.len() * 8);
+        for v in values {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+
+        assert_eq!(bytes.len(), 24);
+
+        // Verify MAX value
+        let max_bytes: [u8; 8] = bytes[0..8].try_into().unwrap();
+        assert_eq!(i64::from_le_bytes(max_bytes), i64::MAX);
+
+        // Verify MIN value
+        let min_bytes: [u8; 8] = bytes[8..16].try_into().unwrap();
+        assert_eq!(i64::from_le_bytes(min_bytes), i64::MIN);
     }
 }
