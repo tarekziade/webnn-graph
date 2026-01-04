@@ -570,4 +570,31 @@ webnn_graph "test" v1 {
         let sci_val = parse_number_value("1e-3");
         assert_eq!(sci_val.as_f64().unwrap(), 0.001);
     }
+
+    #[test]
+    fn test_parse_dollar_sign_identifiers() {
+        let input = r#"
+webnn_graph "test" v1 {
+  inputs {
+    x: f32[1, 10];
+  }
+  consts {
+    $_weight: f32[10, 5] @weights("W");
+  }
+  nodes {
+    $_temp = relu(x);
+    result = matmul($_temp, $_weight);
+  }
+  outputs { result; }
+}
+"#;
+        let graph = parse_wg_text(input).unwrap();
+        assert_eq!(graph.inputs.len(), 1);
+        assert_eq!(graph.consts.len(), 1);
+        assert!(graph.consts.contains_key("$_weight"));
+        assert_eq!(graph.nodes.len(), 2);
+        assert_eq!(graph.nodes[0].id, "$_temp");
+        assert_eq!(graph.nodes[1].id, "result");
+        assert_eq!(graph.nodes[1].inputs, vec!["$_temp", "$_weight"]);
+    }
 }

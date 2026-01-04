@@ -44,7 +44,7 @@ const_annot = {
 
 byte_array = { "[" ~ (int ~ ("," ~ int)*)? ~ "]" }
 
-ident = @{ (ASCII_ALPHA | "_" | "/") ~ (ASCII_ALPHANUMERIC | "_" | "." | "/")* }
+ident = @{ (ASCII_ALPHA | "_" | "/" | "$") ~ (ASCII_ALPHANUMERIC | "_" | "." | "/")* }
 int = @{ ASCII_DIGIT+ }
 number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
 string = @{ "\"" ~ ( "\\\"" | "\\\\" | (!"\"" ~ ANY) )* ~ "\"" }
