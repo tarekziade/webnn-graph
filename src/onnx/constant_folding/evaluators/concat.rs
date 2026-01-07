@@ -5,7 +5,7 @@ use crate::onnx::constant_folding::{
     ConstantEvaluator as EvaluatorTrait, ConstantFoldingContext, ConstantTensor, TensorData,
 };
 use crate::onnx::convert::OnnxError;
-use onnx::onnx::NodeProto;
+use crate::protos::onnx::NodeProto;
 
 pub struct ConcatEvaluator;
 
@@ -189,12 +189,13 @@ impl EvaluatorTrait for ConcatEvaluator {
     }
 
     fn can_evaluate(&self, node: &NodeProto, ctx: &ConstantFoldingContext) -> bool {
-        if node.get_op_type() != "Concat" {
+        if node.op_type.as_str() != "Concat" {
             return false;
         }
 
         // All inputs must be constants
-        node.get_input()
+        node.input
+            .as_slice()
             .iter()
             .all(|input| ctx.is_constant(input.as_str()))
     }
@@ -204,7 +205,7 @@ impl EvaluatorTrait for ConcatEvaluator {
         node: &NodeProto,
         ctx: &ConstantFoldingContext,
     ) -> Result<Vec<ConstantTensor>, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.is_empty() {
             return Err(OnnxError::MissingAttribute {
                 attr: "inputs".to_string(),
@@ -214,10 +215,11 @@ impl EvaluatorTrait for ConcatEvaluator {
 
         // Get axis attribute (required for Concat)
         let axis = node
-            .get_attribute()
+            .attribute
+            .as_slice()
             .iter()
-            .find(|a| a.get_name() == "axis" && a.has_i())
-            .map(|a| a.get_i())
+            .find(|a| a.name.as_str() == "axis")
+            .map(|a| a.i)
             .ok_or_else(|| OnnxError::MissingAttribute {
                 attr: "axis".to_string(),
                 op: "Concat".to_string(),
@@ -238,7 +240,7 @@ impl EvaluatorTrait for ConcatEvaluator {
         let output = ConstantTensor {
             data: output_data.clone(),
             shape: output_shape,
-            data_type: output_data.data_type(),
+            data_type: output_data.data_type().into(),
         };
 
         Ok(vec![output])
@@ -248,7 +250,7 @@ impl EvaluatorTrait for ConcatEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use onnx::onnx::{AttributeProto, NodeProto, TensorProto, TensorProto_DataType};
+    use crate::protos::onnx::{AttributeProto, NodeProto, TensorProto, TensorProto_DataType};
     use std::collections::HashMap;
 
     #[test]
@@ -256,19 +258,23 @@ mod tests {
         // Test concatenating 1D int64 tensors
         // This is the common pattern for shape operations
 
-        let mut tensor1 = TensorProto::new();
-        tensor1.set_name("t1".to_string());
-        tensor1.set_data_type(TensorProto_DataType::INT64);
-        tensor1.set_dims(vec![2]);
-        tensor1.set_int64_data(vec![2, 128]);
+        let tensor1 = TensorProto {
+            name: "t1".to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![2],
+            int64_data: vec![2, 128],
+            ..Default::default()
+        };
 
         let tensor1_static: &'static TensorProto = Box::leak(Box::new(tensor1));
 
-        let mut tensor2 = TensorProto::new();
-        tensor2.set_name("t2".to_string());
-        tensor2.set_data_type(TensorProto_DataType::INT64);
-        tensor2.set_dims(vec![1]);
-        tensor2.set_int64_data(vec![384]);
+        let tensor2 = TensorProto {
+            name: "t2".to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![1],
+            int64_data: vec![384],
+            ..Default::default()
+        };
 
         let tensor2_static: &'static TensorProto = Box::leak(Box::new(tensor2));
 
@@ -280,21 +286,20 @@ mod tests {
         let evaluator = ConcatEvaluator;
 
         // Create Concat node
-        let mut node = NodeProto::new();
-        node.set_op_type("Concat".to_string());
-        node.set_input(protobuf::RepeatedField::from_vec(vec![
-            "t1".to_string(),
-            "t2".to_string(),
-        ]));
-        node.set_output(protobuf::RepeatedField::from_vec(vec![
-            "concatenated".to_string()
-        ]));
+        let mut node = NodeProto {
+            op_type: "Concat".to_string(),
+            input: vec!["t1".to_string(), "t2".to_string()],
+            output: vec!["concatenated".to_string()],
+            ..Default::default()
+        };
 
         // Add axis attribute
-        let mut axis_attr = AttributeProto::new();
-        axis_attr.set_name("axis".to_string());
-        axis_attr.set_i(0);
-        node.set_attribute(protobuf::RepeatedField::from_vec(vec![axis_attr]));
+        let axis_attr = AttributeProto {
+            name: "axis".to_string(),
+            i: 0,
+            ..Default::default()
+        };
+        node.attribute.push(axis_attr);
 
         // Evaluate
         assert!(evaluator.can_evaluate(&node, &ctx));
@@ -316,19 +321,23 @@ mod tests {
     fn test_concat_scalars() {
         // Test concatenating scalar tensors into 1D array
 
-        let mut scalar1 = TensorProto::new();
-        scalar1.set_name("s1".to_string());
-        scalar1.set_data_type(TensorProto_DataType::INT64);
-        scalar1.set_dims(vec![]);
-        scalar1.set_int64_data(vec![12]);
+        let scalar1 = TensorProto {
+            name: "s1".to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![],
+            int64_data: vec![12],
+            ..Default::default()
+        };
 
         let scalar1_static: &'static TensorProto = Box::leak(Box::new(scalar1));
 
-        let mut scalar2 = TensorProto::new();
-        scalar2.set_name("s2".to_string());
-        scalar2.set_data_type(TensorProto_DataType::INT64);
-        scalar2.set_dims(vec![]);
-        scalar2.set_int64_data(vec![64]);
+        let scalar2 = TensorProto {
+            name: "s2".to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![],
+            int64_data: vec![64],
+            ..Default::default()
+        };
 
         let scalar2_static: &'static TensorProto = Box::leak(Box::new(scalar2));
 
@@ -339,20 +348,19 @@ mod tests {
         let ctx = ConstantFoldingContext::new(&init_map).unwrap();
         let evaluator = ConcatEvaluator;
 
-        let mut node = NodeProto::new();
-        node.set_op_type("Concat".to_string());
-        node.set_input(protobuf::RepeatedField::from_vec(vec![
-            "s1".to_string(),
-            "s2".to_string(),
-        ]));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            vec!["result".to_string()],
-        ));
+        let mut node = NodeProto {
+            op_type: "Concat".to_string(),
+            input: vec!["s1".to_string(), "s2".to_string()],
+            output: vec!["result".to_string()],
+            ..Default::default()
+        };
 
-        let mut axis_attr = AttributeProto::new();
-        axis_attr.set_name("axis".to_string());
-        axis_attr.set_i(0);
-        node.set_attribute(protobuf::RepeatedField::from_vec(vec![axis_attr]));
+        let axis_attr = AttributeProto {
+            name: "axis".to_string(),
+            i: 0,
+            ..Default::default()
+        };
+        node.attribute.push(axis_attr);
 
         let result = evaluator.evaluate(&node, &ctx).unwrap();
         let output = &result[0];

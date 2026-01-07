@@ -4,7 +4,7 @@ use crate::ast::Node;
 use crate::ast::{ConstDecl, ConstInit, DataType};
 use crate::onnx::convert::{sanitize_identifier, OnnxError};
 use crate::onnx::ops::{ConversionContext, ConversionResult, OpHandler};
-use onnx::onnx::NodeProto;
+use crate::protos::onnx::NodeProto;
 use serde_json::{json, Map};
 
 pub struct UtilityHandler;
@@ -22,9 +22,9 @@ impl OpHandler for UtilityHandler {
         node: &NodeProto,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let op_type = node.get_op_type();
-        let node_name = if node.has_name() {
-            node.get_name().to_string()
+        let op_type = node.op_type.as_str();
+        let node_name = if !node.name.is_empty() {
+            node.name.as_str().to_string()
         } else {
             "unnamed".to_string()
         };
@@ -53,7 +53,7 @@ impl UtilityHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() != 1 {
             return Err(OnnxError::InvalidShape(format!(
                 "Shape expects 1 input, got {}",
@@ -61,10 +61,10 @@ impl UtilityHandler {
             )));
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0 = context.resolve_input(&inputs[0]);
@@ -81,7 +81,7 @@ impl UtilityHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -95,9 +95,9 @@ impl UtilityHandler {
             return vals.first().copied();
         }
         if let Some(t) = context.initializers.get(name) {
-            let raw = t.get_raw_data();
+            let raw = t.raw_data.as_slice();
             if !raw.is_empty() {
-                if t.get_data_type() == onnx::onnx::TensorProto_DataType::INT32 {
+                if t.data_type == crate::protos::onnx::TensorProto_DataType::Int32 as i32 {
                     return Some(i32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) as i64);
                 }
                 if raw.len() >= 8 {
@@ -105,10 +105,10 @@ impl UtilityHandler {
                         raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
                     ]));
                 }
-            } else if !t.get_int64_data().is_empty() {
-                return t.get_int64_data().first().copied();
-            } else if !t.get_int32_data().is_empty() {
-                return t.get_int32_data().first().map(|v| *v as i64);
+            } else if !t.int64_data.as_slice().is_empty() {
+                return t.int64_data.as_slice().first().copied();
+            } else if !t.int32_data.as_slice().is_empty() {
+                return t.int32_data.as_slice().first().map(|v| *v as i64);
             }
         }
         None
@@ -120,7 +120,7 @@ impl UtilityHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() != 3 {
             return Err(OnnxError::InvalidShape(format!(
                 "Range expects 3 inputs (start, limit, delta), got {}",
@@ -172,10 +172,10 @@ impl UtilityHandler {
             .flat_map(|v| v.to_le_bytes().to_vec())
             .collect();
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let const_decl = ConstDecl {
@@ -186,7 +186,7 @@ impl UtilityHandler {
 
         let mut result = ConversionResult::new(vec![]);
         result.consts.push((output_name.clone(), const_decl));
-        if let Some(out) = node.get_output().first() {
+        if let Some(out) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(out.to_string(), output_name.clone());
@@ -202,7 +202,7 @@ impl UtilityHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.is_empty() {
             return Err(OnnxError::InvalidShape(
                 "Trilu expects at least 1 input (data)".to_string(),
@@ -217,9 +217,9 @@ impl UtilityHandler {
         }
 
         let mut upper = true;
-        for attr in node.get_attribute() {
-            if attr.get_name() == "upper" && attr.has_i() {
-                upper = attr.get_i() != 0;
+        for attr in node.attribute.as_slice() {
+            if attr.name.as_str() == "upper" {
+                upper = attr.i != 0;
             }
         }
 
@@ -235,10 +235,10 @@ impl UtilityHandler {
             }
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0 = context.resolve_input(&inputs[0]);
@@ -255,7 +255,7 @@ impl UtilityHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -276,15 +276,15 @@ impl UtilityHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         // Determine the target shape: prefer inferred output shape, otherwise try the shape input const.
         let mut shape: Option<Vec<i64>> = None;
-        if let Some(out) = node.get_output().first() {
+        if let Some(out) = node.output.as_slice().first() {
             if let Some(s) = context.value_shapes.get(out) {
                 shape = Some(s.clone());
             } else {
@@ -295,7 +295,7 @@ impl UtilityHandler {
             }
         }
         if shape.is_none() {
-            if let Some(shape_input) = node.get_input().first() {
+            if let Some(shape_input) = node.input.as_slice().first() {
                 if let Some(vals) = context.const_values.get(shape_input) {
                     shape = Some(vals.clone());
                 } else if let Some(len_shape) = context.value_shapes.get(shape_input) {
@@ -312,17 +312,19 @@ impl UtilityHandler {
         // Determine fill value and data type (default int64 zero)
         let mut fill_value_i64: i64 = 0;
         let mut dtype = DataType::Int64;
-        for attr in node.get_attribute() {
-            if attr.get_name() == "value" && attr.has_t() {
-                let t = attr.get_t();
-                match t.get_data_type() {
+        for attr in node.attribute.as_slice() {
+            if attr.name.as_str() == "value" && attr.t.is_some() {
+                let t = attr.t.as_ref().unwrap();
+                match t.data_type {
                     // FLOAT
-                    onnx::onnx::TensorProto_DataType::FLOAT => {
+                    x if x == crate::protos::onnx::TensorProto_DataType::Float as i32 => {
                         dtype = DataType::Float32;
-                        if !t.get_float_data().is_empty() {
-                            fill_value_i64 = t.get_float_data()[0].to_bits() as i64;
-                        } else if !t.get_raw_data().is_empty() && t.get_raw_data().len() >= 4 {
-                            let raw = &t.get_raw_data()[..4];
+                        if !t.float_data.as_slice().is_empty() {
+                            fill_value_i64 = t.float_data.as_slice()[0].to_bits() as i64;
+                        } else if !t.raw_data.as_slice().is_empty()
+                            && t.raw_data.as_slice().len() >= 4
+                        {
+                            let raw = &t.raw_data.as_slice()[..4];
                             let bits = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
                             fill_value_i64 = bits as i64;
                         } else {
@@ -330,12 +332,14 @@ impl UtilityHandler {
                         }
                     }
                     // INT64
-                    onnx::onnx::TensorProto_DataType::INT64 => {
+                    x if x == crate::protos::onnx::TensorProto_DataType::Int64 as i32 => {
                         dtype = DataType::Int64;
-                        if !t.get_int64_data().is_empty() {
-                            fill_value_i64 = t.get_int64_data()[0];
-                        } else if !t.get_raw_data().is_empty() && t.get_raw_data().len() >= 8 {
-                            let raw = &t.get_raw_data()[..8];
+                        if !t.int64_data.as_slice().is_empty() {
+                            fill_value_i64 = t.int64_data.as_slice()[0];
+                        } else if !t.raw_data.as_slice().is_empty()
+                            && t.raw_data.as_slice().len() >= 8
+                        {
+                            let raw = &t.raw_data.as_slice()[..8];
                             fill_value_i64 = i64::from_le_bytes([
                                 raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
                             ]);
@@ -377,7 +381,7 @@ impl UtilityHandler {
 
         let mut result = ConversionResult::new(vec![]);
         result.consts.push((output_name.clone(), const_decl));
-        if let Some(out) = node.get_output().first() {
+        if let Some(out) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(out.to_string(), output_name.clone());
@@ -395,7 +399,7 @@ impl UtilityHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() < 2 {
             return Err(OnnxError::InvalidShape(format!(
                 "Gather expects 2 inputs (data, indices), got {}",
@@ -405,16 +409,16 @@ impl UtilityHandler {
 
         // Extract axis attribute (default: 0)
         let mut axis = 0i64;
-        for attr in node.get_attribute() {
-            if attr.get_name() == "axis" && attr.has_i() {
-                axis = attr.get_i();
+        for attr in node.attribute.as_slice() {
+            if attr.name.as_str() == "axis" && attr.i != 0 {
+                axis = attr.i;
             }
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0 = context.resolve_input(&inputs[0]);
@@ -452,7 +456,7 @@ impl UtilityHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -474,17 +478,17 @@ impl UtilityHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.is_empty() {
             return Err(OnnxError::InvalidShape(
                 "Slice expects at least 1 input".to_string(),
             ));
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0 = context.resolve_input(&inputs[0]);
@@ -494,9 +498,9 @@ impl UtilityHandler {
                 return Some(vals.clone());
             }
             if let Some(t) = context.initializers.get(name) {
-                let raw = t.get_raw_data();
+                let raw = t.raw_data.as_slice();
                 if !raw.is_empty() {
-                    if t.get_data_type() == onnx::onnx::TensorProto_DataType::INT32 {
+                    if t.data_type == crate::protos::onnx::TensorProto_DataType::Int32 as i32 {
                         return Some(
                             raw.chunks_exact(4)
                                 .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as i64)
@@ -510,10 +514,10 @@ impl UtilityHandler {
                             })
                             .collect(),
                     );
-                } else if !t.get_int64_data().is_empty() {
-                    return Some(t.get_int64_data().to_vec());
-                } else if !t.get_int32_data().is_empty() {
-                    return Some(t.get_int32_data().iter().map(|&v| v as i64).collect());
+                } else if !t.int64_data.as_slice().is_empty() {
+                    return Some(t.int64_data.as_slice().to_vec());
+                } else if !t.int32_data.as_slice().is_empty() {
+                    return Some(t.int32_data.as_slice().iter().map(|&v| v as i64).collect());
                 }
             }
             None
@@ -613,31 +617,20 @@ impl UtilityHandler {
             }
         } else {
             // Extract from attributes (older opset)
-            for attr in node.get_attribute() {
-                match attr.get_name() {
+            for attr in node.attribute.as_slice() {
+                match attr.name.as_str() {
                     "starts" => {
-                        options.insert(
-                            "starts".to_string(),
-                            serde_json::json!(attr.get_ints().to_vec()),
-                        );
+                        options
+                            .insert("starts".to_string(), serde_json::json!(&attr.ints.to_vec()));
                     }
                     "ends" => {
-                        options.insert(
-                            "ends".to_string(),
-                            serde_json::json!(attr.get_ints().to_vec()),
-                        );
+                        options.insert("ends".to_string(), serde_json::json!(&attr.ints.to_vec()));
                     }
                     "axes" => {
-                        options.insert(
-                            "axes".to_string(),
-                            serde_json::json!(attr.get_ints().to_vec()),
-                        );
+                        options.insert("axes".to_string(), serde_json::json!(&attr.ints.to_vec()));
                     }
                     "steps" => {
-                        options.insert(
-                            "steps".to_string(),
-                            serde_json::json!(attr.get_ints().to_vec()),
-                        );
+                        options.insert("steps".to_string(), serde_json::json!(&attr.ints.to_vec()));
                     }
                     _ => {}
                 }
@@ -657,7 +650,7 @@ impl UtilityHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -676,27 +669,26 @@ impl UtilityHandler {
 mod tests {
     use super::*;
     use crate::ast::DataType;
-    use onnx::onnx::{AttributeProto, NodeProto};
+    use crate::protos::onnx::{AttributeProto, NodeProto};
     use serde_json::json;
 
     fn create_test_node(op_type: &str, inputs: Vec<&str>, outputs: Vec<&str>) -> NodeProto {
-        let mut node = NodeProto::new();
-        node.set_op_type(op_type.to_string());
-        node.set_name(format!("test_{}", op_type.to_lowercase()));
-        node.set_input(protobuf::RepeatedField::from_vec(
-            inputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            outputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node
+        NodeProto {
+            op_type: op_type.to_string(),
+            name: format!("test_{}", op_type.to_lowercase()),
+            input: inputs.iter().map(|s| s.to_string()).collect(),
+            output: outputs.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     fn add_int_attribute(node: &mut NodeProto, name: &str, value: i64) {
-        let mut attr = AttributeProto::new();
-        attr.set_name(name.to_string());
-        attr.set_i(value);
-        node.mut_attribute().push(attr);
+        let attr = AttributeProto {
+            name: name.to_string(),
+            i: value,
+            ..Default::default()
+        };
+        node.attribute.push(attr);
     }
 
     #[test]

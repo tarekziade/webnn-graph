@@ -3,6 +3,7 @@ pub mod emit_html;
 pub mod emit_js;
 pub mod onnx;
 pub mod parser;
+pub mod protos;
 pub mod serialize;
 pub mod validate;
 pub mod weights;

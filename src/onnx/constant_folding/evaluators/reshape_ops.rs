@@ -5,7 +5,7 @@ use crate::onnx::constant_folding::{
     ConstantEvaluator as EvaluatorTrait, ConstantFoldingContext, ConstantTensor, TensorData,
 };
 use crate::onnx::convert::OnnxError;
-use onnx::onnx::{NodeProto, TensorProto_DataType};
+use crate::protos::onnx::{NodeProto, TensorProto_DataType};
 
 /// Unsqueeze operation: add dimensions of size 1
 pub struct UnsqueezeEvaluator;
@@ -16,12 +16,12 @@ impl EvaluatorTrait for UnsqueezeEvaluator {
     }
 
     fn can_evaluate(&self, node: &NodeProto, ctx: &ConstantFoldingContext) -> bool {
-        if node.get_op_type() != "Unsqueeze" {
+        if node.op_type.as_str() != "Unsqueeze" {
             return false;
         }
 
         // Input must be constant
-        if let Some(input) = node.get_input().first() {
+        if let Some(input) = node.input.as_slice().first() {
             return ctx.is_constant(input.as_str());
         }
 
@@ -33,13 +33,14 @@ impl EvaluatorTrait for UnsqueezeEvaluator {
         node: &NodeProto,
         ctx: &ConstantFoldingContext,
     ) -> Result<Vec<ConstantTensor>, OnnxError> {
-        let input_name = node
-            .get_input()
-            .first()
-            .ok_or_else(|| OnnxError::MissingAttribute {
-                attr: "input".to_string(),
-                op: "Unsqueeze".to_string(),
-            })?;
+        let input_name =
+            node.input
+                .as_slice()
+                .first()
+                .ok_or_else(|| OnnxError::MissingAttribute {
+                    attr: "input".to_string(),
+                    op: "Unsqueeze".to_string(),
+                })?;
 
         let input_tensor = ctx.get_constant(input_name.as_str()).ok_or_else(|| {
             OnnxError::ShapeInference(format!("Input tensor '{}' not found", input_name))
@@ -47,10 +48,11 @@ impl EvaluatorTrait for UnsqueezeEvaluator {
 
         // Get axes attribute
         let mut axes: Vec<i64> = node
-            .get_attribute()
+            .attribute
+            .as_slice()
             .iter()
-            .find(|a| a.get_name() == "axes")
-            .map(|a| a.get_ints().to_vec())
+            .find(|a| a.name.as_str() == "axes")
+            .map(|a| a.ints.clone())
             .unwrap_or_default();
 
         if axes.is_empty() {
@@ -96,12 +98,12 @@ impl EvaluatorTrait for SqueezeEvaluator {
     }
 
     fn can_evaluate(&self, node: &NodeProto, ctx: &ConstantFoldingContext) -> bool {
-        if node.get_op_type() != "Squeeze" {
+        if node.op_type.as_str() != "Squeeze" {
             return false;
         }
 
         // Input must be constant
-        if let Some(input) = node.get_input().first() {
+        if let Some(input) = node.input.as_slice().first() {
             return ctx.is_constant(input.as_str());
         }
 
@@ -113,13 +115,14 @@ impl EvaluatorTrait for SqueezeEvaluator {
         node: &NodeProto,
         ctx: &ConstantFoldingContext,
     ) -> Result<Vec<ConstantTensor>, OnnxError> {
-        let input_name = node
-            .get_input()
-            .first()
-            .ok_or_else(|| OnnxError::MissingAttribute {
-                attr: "input".to_string(),
-                op: "Squeeze".to_string(),
-            })?;
+        let input_name =
+            node.input
+                .as_slice()
+                .first()
+                .ok_or_else(|| OnnxError::MissingAttribute {
+                    attr: "input".to_string(),
+                    op: "Squeeze".to_string(),
+                })?;
 
         let input_tensor = ctx.get_constant(input_name.as_str()).ok_or_else(|| {
             OnnxError::ShapeInference(format!("Input tensor '{}' not found", input_name))
@@ -127,10 +130,11 @@ impl EvaluatorTrait for SqueezeEvaluator {
 
         // Get axes attribute (if not specified, squeeze all dimensions of size 1)
         let axes: Vec<i64> = node
-            .get_attribute()
+            .attribute
+            .as_slice()
             .iter()
-            .find(|a| a.get_name() == "axes")
-            .map(|a| a.get_ints().to_vec())
+            .find(|a| a.name.as_str() == "axes")
+            .map(|a| a.ints.clone())
             .unwrap_or_default();
 
         // Compute output shape
@@ -184,54 +188,54 @@ impl CastEvaluator {
     ) -> Result<TensorData, OnnxError> {
         match (data, target_type) {
             // Int64 → other types
-            (TensorData::Int64(v), TensorProto_DataType::INT64) => Ok(TensorData::Int64(v.clone())),
-            (TensorData::Int64(v), TensorProto_DataType::INT32) => {
+            (TensorData::Int64(v), TensorProto_DataType::Int64) => Ok(TensorData::Int64(v.clone())),
+            (TensorData::Int64(v), TensorProto_DataType::Int32) => {
                 Ok(TensorData::Int32(v.iter().map(|&x| x as i32).collect()))
             }
-            (TensorData::Int64(v), TensorProto_DataType::FLOAT) => {
+            (TensorData::Int64(v), TensorProto_DataType::Float) => {
                 Ok(TensorData::Float32(v.iter().map(|&x| x as f32).collect()))
             }
-            (TensorData::Int64(v), TensorProto_DataType::DOUBLE) => {
+            (TensorData::Int64(v), TensorProto_DataType::Double) => {
                 Ok(TensorData::Float64(v.iter().map(|&x| x as f64).collect()))
             }
 
             // Int32 → other types
-            (TensorData::Int32(v), TensorProto_DataType::INT32) => Ok(TensorData::Int32(v.clone())),
-            (TensorData::Int32(v), TensorProto_DataType::INT64) => {
+            (TensorData::Int32(v), TensorProto_DataType::Int32) => Ok(TensorData::Int32(v.clone())),
+            (TensorData::Int32(v), TensorProto_DataType::Int64) => {
                 Ok(TensorData::Int64(v.iter().map(|&x| x as i64).collect()))
             }
-            (TensorData::Int32(v), TensorProto_DataType::FLOAT) => {
+            (TensorData::Int32(v), TensorProto_DataType::Float) => {
                 Ok(TensorData::Float32(v.iter().map(|&x| x as f32).collect()))
             }
-            (TensorData::Int32(v), TensorProto_DataType::DOUBLE) => {
+            (TensorData::Int32(v), TensorProto_DataType::Double) => {
                 Ok(TensorData::Float64(v.iter().map(|&x| x as f64).collect()))
             }
 
             // Float32 → other types
-            (TensorData::Float32(v), TensorProto_DataType::FLOAT) => {
+            (TensorData::Float32(v), TensorProto_DataType::Float) => {
                 Ok(TensorData::Float32(v.clone()))
             }
-            (TensorData::Float32(v), TensorProto_DataType::DOUBLE) => {
+            (TensorData::Float32(v), TensorProto_DataType::Double) => {
                 Ok(TensorData::Float64(v.iter().map(|&x| x as f64).collect()))
             }
-            (TensorData::Float32(v), TensorProto_DataType::INT64) => {
+            (TensorData::Float32(v), TensorProto_DataType::Int64) => {
                 Ok(TensorData::Int64(v.iter().map(|&x| x as i64).collect()))
             }
-            (TensorData::Float32(v), TensorProto_DataType::INT32) => {
+            (TensorData::Float32(v), TensorProto_DataType::Int32) => {
                 Ok(TensorData::Int32(v.iter().map(|&x| x as i32).collect()))
             }
 
             // Float64 → other types
-            (TensorData::Float64(v), TensorProto_DataType::DOUBLE) => {
+            (TensorData::Float64(v), TensorProto_DataType::Double) => {
                 Ok(TensorData::Float64(v.clone()))
             }
-            (TensorData::Float64(v), TensorProto_DataType::FLOAT) => {
+            (TensorData::Float64(v), TensorProto_DataType::Float) => {
                 Ok(TensorData::Float32(v.iter().map(|&x| x as f32).collect()))
             }
-            (TensorData::Float64(v), TensorProto_DataType::INT64) => {
+            (TensorData::Float64(v), TensorProto_DataType::Int64) => {
                 Ok(TensorData::Int64(v.iter().map(|&x| x as i64).collect()))
             }
-            (TensorData::Float64(v), TensorProto_DataType::INT32) => {
+            (TensorData::Float64(v), TensorProto_DataType::Int32) => {
                 Ok(TensorData::Int32(v.iter().map(|&x| x as i32).collect()))
             }
 
@@ -253,12 +257,12 @@ impl EvaluatorTrait for CastEvaluator {
     }
 
     fn can_evaluate(&self, node: &NodeProto, ctx: &ConstantFoldingContext) -> bool {
-        if node.get_op_type() != "Cast" {
+        if node.op_type.as_str() != "Cast" {
             return false;
         }
 
         // Input must be constant
-        if let Some(input) = node.get_input().first() {
+        if let Some(input) = node.input.as_slice().first() {
             return ctx.is_constant(input.as_str());
         }
 
@@ -270,13 +274,14 @@ impl EvaluatorTrait for CastEvaluator {
         node: &NodeProto,
         ctx: &ConstantFoldingContext,
     ) -> Result<Vec<ConstantTensor>, OnnxError> {
-        let input_name = node
-            .get_input()
-            .first()
-            .ok_or_else(|| OnnxError::MissingAttribute {
-                attr: "input".to_string(),
-                op: "Cast".to_string(),
-            })?;
+        let input_name =
+            node.input
+                .as_slice()
+                .first()
+                .ok_or_else(|| OnnxError::MissingAttribute {
+                    attr: "input".to_string(),
+                    op: "Cast".to_string(),
+                })?;
 
         let input_tensor = ctx.get_constant(input_name.as_str()).ok_or_else(|| {
             OnnxError::ShapeInference(format!("Input tensor '{}' not found", input_name))
@@ -284,10 +289,11 @@ impl EvaluatorTrait for CastEvaluator {
 
         // Get 'to' attribute (target type)
         let target_type_i32 = node
-            .get_attribute()
+            .attribute
+            .as_slice()
             .iter()
-            .find(|a| a.get_name() == "to" && a.has_i())
-            .map(|a| a.get_i() as i32)
+            .find(|a| a.name.as_str() == "to" && a.i != 0)
+            .map(|a| a.i as i32)
             .ok_or_else(|| OnnxError::MissingAttribute {
                 attr: "to".to_string(),
                 op: "Cast".to_string(),
@@ -295,13 +301,13 @@ impl EvaluatorTrait for CastEvaluator {
 
         // Convert i32 to TensorProto_DataType enum
         let target_type = match target_type_i32 {
-            1 => TensorProto_DataType::FLOAT,
-            2 => TensorProto_DataType::UINT8,
-            3 => TensorProto_DataType::INT8,
-            5 => TensorProto_DataType::INT16,
-            6 => TensorProto_DataType::INT32,
-            7 => TensorProto_DataType::INT64,
-            11 => TensorProto_DataType::DOUBLE,
+            1 => TensorProto_DataType::Float,
+            2 => TensorProto_DataType::Uint8,
+            3 => TensorProto_DataType::Int8,
+            5 => TensorProto_DataType::Int16,
+            6 => TensorProto_DataType::Int32,
+            7 => TensorProto_DataType::Int64,
+            11 => TensorProto_DataType::Double,
             _ => {
                 return Err(OnnxError::UnsupportedOp {
                     op: "Cast".to_string(),
@@ -316,7 +322,7 @@ impl EvaluatorTrait for CastEvaluator {
         let output = ConstantTensor {
             data: output_data,
             shape: input_tensor.shape.clone(),
-            data_type: target_type,
+            data_type: target_type.into(),
         };
 
         Ok(vec![output])
@@ -326,16 +332,18 @@ impl EvaluatorTrait for CastEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use onnx::onnx::{AttributeProto, TensorProto};
+    use crate::protos::onnx::{AttributeProto, TensorProto};
     use std::collections::HashMap;
 
     #[test]
     fn test_unsqueeze() {
-        let mut tensor = TensorProto::new();
-        tensor.set_name("input".to_string());
-        tensor.set_data_type(TensorProto_DataType::INT64);
-        tensor.set_dims(vec![3]);
-        tensor.set_int64_data(vec![2, 128, 384]);
+        let tensor = TensorProto {
+            name: "input".to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![3],
+            int64_data: vec![2, 128, 384],
+            ..Default::default()
+        };
 
         let tensor_static: &'static TensorProto = Box::leak(Box::new(tensor));
 
@@ -346,17 +354,19 @@ mod tests {
         let evaluator = UnsqueezeEvaluator;
 
         // Unsqueeze at axes [0]
-        let mut node = NodeProto::new();
-        node.set_op_type("Unsqueeze".to_string());
-        node.set_input(protobuf::RepeatedField::from_vec(vec!["input".to_string()]));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            vec!["output".to_string()],
-        ));
+        let mut node = NodeProto {
+            op_type: "Unsqueeze".to_string(),
+            input: vec!["input".to_string()],
+            output: vec!["output".to_string()],
+            ..Default::default()
+        };
 
-        let mut axes_attr = AttributeProto::new();
-        axes_attr.set_name("axes".to_string());
-        axes_attr.set_ints(vec![0]);
-        node.set_attribute(protobuf::RepeatedField::from_vec(vec![axes_attr]));
+        let axes_attr = AttributeProto {
+            name: "axes".to_string(),
+            ints: vec![0],
+            ..Default::default()
+        };
+        node.attribute.push(axes_attr);
 
         let result = evaluator.evaluate(&node, &ctx).unwrap();
         let output = &result[0];
@@ -372,11 +382,13 @@ mod tests {
 
     #[test]
     fn test_squeeze() {
-        let mut tensor = TensorProto::new();
-        tensor.set_name("input".to_string());
-        tensor.set_data_type(TensorProto_DataType::INT64);
-        tensor.set_dims(vec![1, 3, 1]);
-        tensor.set_int64_data(vec![2, 128, 384]);
+        let tensor = TensorProto {
+            name: "input".to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![1, 3, 1],
+            int64_data: vec![2, 128, 384],
+            ..Default::default()
+        };
 
         let tensor_static: &'static TensorProto = Box::leak(Box::new(tensor));
 
@@ -387,12 +399,12 @@ mod tests {
         let evaluator = SqueezeEvaluator;
 
         // Squeeze all dimensions of size 1
-        let mut node = NodeProto::new();
-        node.set_op_type("Squeeze".to_string());
-        node.set_input(protobuf::RepeatedField::from_vec(vec!["input".to_string()]));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            vec!["output".to_string()],
-        ));
+        let node = NodeProto {
+            op_type: "Squeeze".to_string(),
+            input: vec!["input".to_string()],
+            output: vec!["output".to_string()],
+            ..Default::default()
+        };
 
         let result = evaluator.evaluate(&node, &ctx).unwrap();
         let output = &result[0];
@@ -408,11 +420,13 @@ mod tests {
 
     #[test]
     fn test_cast_int64_to_int32() {
-        let mut tensor = TensorProto::new();
-        tensor.set_name("input".to_string());
-        tensor.set_data_type(TensorProto_DataType::INT64);
-        tensor.set_dims(vec![3]);
-        tensor.set_int64_data(vec![2, 128, 384]);
+        let tensor = TensorProto {
+            name: "input".to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![3],
+            int64_data: vec![2, 128, 384],
+            ..Default::default()
+        };
 
         let tensor_static: &'static TensorProto = Box::leak(Box::new(tensor));
 
@@ -423,22 +437,24 @@ mod tests {
         let evaluator = CastEvaluator;
 
         // Cast to INT32
-        let mut node = NodeProto::new();
-        node.set_op_type("Cast".to_string());
-        node.set_input(protobuf::RepeatedField::from_vec(vec!["input".to_string()]));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            vec!["output".to_string()],
-        ));
+        let mut node = NodeProto {
+            op_type: "Cast".to_string(),
+            input: vec!["input".to_string()],
+            output: vec!["output".to_string()],
+            ..Default::default()
+        };
 
-        let mut to_attr = AttributeProto::new();
-        to_attr.set_name("to".to_string());
-        to_attr.set_i(6); // INT32 = 6 in ONNX
-        node.set_attribute(protobuf::RepeatedField::from_vec(vec![to_attr]));
+        let to_attr = AttributeProto {
+            name: "to".to_string(),
+            i: 6, // INT32 = 6 in ONNX
+            ..Default::default()
+        };
+        node.attribute.push(to_attr);
 
         let result = evaluator.evaluate(&node, &ctx).unwrap();
         let output = &result[0];
 
-        assert_eq!(output.data_type, TensorProto_DataType::INT32);
+        assert_eq!(output.data_type, TensorProto_DataType::Int32 as i32);
 
         if let TensorData::Int32(ref values) = output.data {
             assert_eq!(values, &vec![2, 128, 384]);

@@ -5,7 +5,7 @@ use crate::onnx::constant_folding::{
     ConstantEvaluator as EvaluatorTrait, ConstantFoldingContext, ConstantTensor, TensorData,
 };
 use crate::onnx::convert::OnnxError;
-use onnx::onnx::{NodeProto, TensorProto_DataType};
+use crate::protos::onnx::{NodeProto, TensorProto_DataType};
 
 pub struct RangeEvaluator;
 
@@ -15,17 +15,18 @@ impl EvaluatorTrait for RangeEvaluator {
     }
 
     fn can_evaluate(&self, node: &NodeProto, ctx: &ConstantFoldingContext) -> bool {
-        if node.get_op_type() != "Range" {
+        if node.op_type.as_str() != "Range" {
             return false;
         }
 
         // Range requires 3 constant inputs: start, limit (end), delta (step)
-        if node.get_input().len() != 3 {
+        if node.input.as_slice().len() != 3 {
             return false;
         }
 
         // All inputs must be constants
-        node.get_input()
+        node.input
+            .as_slice()
             .iter()
             .all(|inp| ctx.is_constant(inp.as_str()))
     }
@@ -35,16 +36,16 @@ impl EvaluatorTrait for RangeEvaluator {
         node: &NodeProto,
         ctx: &ConstantFoldingContext,
     ) -> Result<Vec<ConstantTensor>, OnnxError> {
-        if node.get_input().len() != 3 {
+        if node.input.as_slice().len() != 3 {
             return Err(OnnxError::MissingAttribute {
                 attr: "inputs (need 3: start, limit, delta)".to_string(),
                 op: "Range".to_string(),
             });
         }
 
-        let start_name = &node.get_input()[0];
-        let limit_name = &node.get_input()[1];
-        let delta_name = &node.get_input()[2];
+        let start_name = &node.input.as_slice()[0];
+        let limit_name = &node.input.as_slice()[1];
+        let delta_name = &node.input.as_slice()[2];
 
         let start_tensor = ctx.get_constant(start_name.as_str()).ok_or_else(|| {
             OnnxError::ShapeInference(format!("Start tensor '{}' not found", start_name))
@@ -88,7 +89,7 @@ impl EvaluatorTrait for RangeEvaluator {
         let output = ConstantTensor {
             data: TensorData::Int64(values.clone()),
             shape: vec![values.len() as i64],
-            data_type: TensorProto_DataType::INT64,
+            data_type: TensorProto_DataType::Int64.into(),
         };
 
         Ok(vec![output])
@@ -125,16 +126,17 @@ fn extract_scalar_i64(data: &TensorData) -> Result<i64, OnnxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use onnx::onnx::TensorProto;
+    use crate::protos::onnx::TensorProto;
     use std::collections::HashMap;
 
     fn create_scalar_tensor(name: &str, value: i64) -> TensorProto {
-        let mut tensor = TensorProto::new();
-        tensor.set_name(name.to_string());
-        tensor.set_data_type(TensorProto_DataType::INT64);
-        tensor.set_dims(vec![]); // Scalar tensor
-        tensor.set_raw_data(value.to_le_bytes().to_vec());
-        tensor
+        TensorProto {
+            name: name.to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![], // Scalar tensor
+            raw_data: value.to_le_bytes().to_vec(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -151,16 +153,16 @@ mod tests {
         let ctx = ConstantFoldingContext::new(&init_map).unwrap();
         let evaluator = RangeEvaluator;
 
-        let mut node = NodeProto::new();
-        node.set_op_type("Range".to_string());
-        node.set_input(protobuf::RepeatedField::from_vec(vec![
-            "start".to_string(),
-            "limit".to_string(),
-            "delta".to_string(),
-        ]));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            vec!["output".to_string()],
-        ));
+        let node = NodeProto {
+            op_type: "Range".to_string(),
+            input: vec![
+                "start".to_string(),
+                "limit".to_string(),
+                "delta".to_string(),
+            ],
+            output: vec!["output".to_string()],
+            ..Default::default()
+        };
 
         assert!(evaluator.can_evaluate(&node, &ctx));
 
@@ -169,7 +171,7 @@ mod tests {
 
         let output = &result[0];
         assert_eq!(output.shape, vec![5]);
-        assert_eq!(output.data_type, TensorProto_DataType::INT64);
+        assert_eq!(output.data_type, TensorProto_DataType::Int64 as i32);
 
         if let TensorData::Int64(ref values) = output.data {
             assert_eq!(values, &vec![0, 1, 2, 3, 4]);
@@ -192,16 +194,16 @@ mod tests {
         let ctx = ConstantFoldingContext::new(&init_map).unwrap();
         let evaluator = RangeEvaluator;
 
-        let mut node = NodeProto::new();
-        node.set_op_type("Range".to_string());
-        node.set_input(protobuf::RepeatedField::from_vec(vec![
-            "start".to_string(),
-            "limit".to_string(),
-            "delta".to_string(),
-        ]));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            vec!["output".to_string()],
-        ));
+        let node = NodeProto {
+            op_type: "Range".to_string(),
+            input: vec![
+                "start".to_string(),
+                "limit".to_string(),
+                "delta".to_string(),
+            ],
+            output: vec!["output".to_string()],
+            ..Default::default()
+        };
 
         let result = evaluator.evaluate(&node, &ctx).unwrap();
         assert_eq!(result.len(), 1);
@@ -227,16 +229,16 @@ mod tests {
         let ctx = ConstantFoldingContext::new(&init_map).unwrap();
         let evaluator = RangeEvaluator;
 
-        let mut node = NodeProto::new();
-        node.set_op_type("Range".to_string());
-        node.set_input(protobuf::RepeatedField::from_vec(vec![
-            "start".to_string(),
-            "limit".to_string(),
-            "delta".to_string(),
-        ]));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            vec!["output".to_string()],
-        ));
+        let node = NodeProto {
+            op_type: "Range".to_string(),
+            input: vec![
+                "start".to_string(),
+                "limit".to_string(),
+                "delta".to_string(),
+            ],
+            output: vec!["output".to_string()],
+            ..Default::default()
+        };
 
         let result = evaluator.evaluate(&node, &ctx).unwrap();
 

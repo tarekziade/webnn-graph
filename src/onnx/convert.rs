@@ -2,7 +2,11 @@
 
 use crate::ast::{DataType, GraphJson};
 use crate::onnx::types::TypeConversionError;
-use onnx::onnx::{ModelProto, TensorProto, TensorProto_DataType};
+use crate::protos::onnx::{
+    tensor_shape_proto::dimension::Value as DimensionValue, type_proto::Value as TypeProtoValue,
+    ModelProto, TensorProto, TensorProto_DataType,
+};
+use prost::Message;
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -48,18 +52,18 @@ pub fn sanitize_identifier(name: &str) -> String {
 
 /// Infer output shape for an ONNX node based on its operation type and inputs
 fn infer_shape(
-    node: &onnx::onnx::NodeProto,
+    node: &crate::protos::onnx::NodeProto,
     value_shapes: &HashMap<String, Vec<i64>>,
     initializers: &HashMap<String, &TensorProto>,
     const_values: &HashMap<String, Vec<i64>>,
 ) -> Option<Vec<i64>> {
-    let op = node.get_op_type();
+    let op = node.op_type.as_str();
 
     match op {
         // Unary operations that preserve shape
         "Cast" | "Relu" | "Tanh" | "Sigmoid" | "Erf" | "Softmax" | "Gelu" | "Exp" | "Log"
         | "Abs" | "Neg" | "Sqrt" | "LayerNormalization" | "Trilu" => {
-            let ins = node.get_input();
+            let ins = node.input.as_slice();
             if ins.is_empty() {
                 return None;
             }
@@ -69,7 +73,7 @@ fn infer_shape(
         // Binary operations (with broadcasting) - prefer shape with more dimensions
         // This is a simplification; proper implementation would handle broadcasting rules
         "Add" | "Sub" | "Mul" | "Div" | "Pow" => {
-            let ins = node.get_input();
+            let ins = node.input.as_slice();
             if ins.len() < 2 {
                 return None;
             }
@@ -94,7 +98,7 @@ fn infer_shape(
 
         // MatMul (2D matrix multiplication)
         "MatMul" => {
-            let ins = node.get_input();
+            let ins = node.input.as_slice();
             if ins.len() < 2 {
                 return None;
             }
@@ -122,7 +126,7 @@ fn infer_shape(
 
         // Transpose preserves shape with permuted dimensions
         "Transpose" => {
-            let ins = node.get_input();
+            let ins = node.input.as_slice();
             if ins.is_empty() {
                 return None;
             }
@@ -130,10 +134,11 @@ fn infer_shape(
 
             // Get perm attribute
             let perm: Vec<usize> = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "perm")
-                .map(|a| a.get_ints().iter().map(|&i| i as usize).collect())
+                .find(|a| a.name.as_str() == "perm")
+                .map(|a| a.ints.iter().map(|&i| i as usize).collect::<Vec<usize>>())
                 .unwrap_or_else(|| (0..input_shape.len()).rev().collect());
 
             // Apply permutation
@@ -142,7 +147,7 @@ fn infer_shape(
 
         // Reduce operations
         "ReduceMean" | "ReduceSum" | "ReduceMax" | "ReduceMin" => {
-            let ins = node.get_input();
+            let ins = node.input.as_slice();
             if ins.is_empty() {
                 return None;
             }
@@ -150,24 +155,20 @@ fn infer_shape(
 
             // Check keepdims attribute (default is 1/true)
             let keepdims = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "keepdims")
-                .and_then(|a| {
-                    if a.has_i() {
-                        Some(a.get_i() != 0)
-                    } else {
-                        None
-                    }
-                })
+                .find(|a| a.name.as_str() == "keepdims")
+                .and_then(|a| if a.i != 0 { Some(a.i != 0) } else { None })
                 .unwrap_or(true);
 
             // Get axes attribute
             let axes: Vec<i64> = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "axes")
-                .map(|a| a.get_ints().to_vec())
+                .find(|a| a.name.as_str() == "axes")
+                .map(|a| a.ints.clone())
                 .unwrap_or_default();
 
             if axes.is_empty() {
@@ -203,7 +204,7 @@ fn infer_shape(
 
         // Gemm (generalized matrix multiplication)
         "Gemm" => {
-            let ins = node.get_input();
+            let ins = node.input.as_slice();
             if ins.len() < 2 {
                 return None;
             }
@@ -217,29 +218,19 @@ fn infer_shape(
 
             // Check transA and transB attributes
             let trans_a = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "transA")
-                .and_then(|a| {
-                    if a.has_i() {
-                        Some(a.get_i() != 0)
-                    } else {
-                        None
-                    }
-                })
+                .find(|a| a.name.as_str() == "transA")
+                .and_then(|a| if a.i != 0 { Some(a.i != 0) } else { None })
                 .unwrap_or(false);
 
             let trans_b = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "transB")
-                .and_then(|a| {
-                    if a.has_i() {
-                        Some(a.get_i() != 0)
-                    } else {
-                        None
-                    }
-                })
+                .find(|a| a.name.as_str() == "transB")
+                .and_then(|a| if a.i != 0 { Some(a.i != 0) } else { None })
                 .unwrap_or(false);
 
             let m = if trans_a { a_shape[1] } else { a_shape[0] };
@@ -249,7 +240,7 @@ fn infer_shape(
         }
 
         "Gather" => {
-            let ins = node.get_input();
+            let ins = node.input.as_slice();
             if ins.len() < 2 {
                 return None;
             }
@@ -258,10 +249,11 @@ fn infer_shape(
             let indices_shape = value_shapes.get(ins[1].as_str())?;
 
             let mut axis = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "axis")
-                .and_then(|a| a.has_i().then(|| a.get_i()))
+                .find(|a| a.name.as_str() == "axis")
+                .and_then(|a| if a.i != 0 { Some(a.i) } else { None })
                 .unwrap_or(0);
 
             if axis < 0 {
@@ -283,17 +275,18 @@ fn infer_shape(
         }
 
         "Unsqueeze" => {
-            let ins = node.get_input();
+            let ins = node.input.as_slice();
             if ins.is_empty() {
                 return None;
             }
 
             let input_shape = value_shapes.get(ins[0].as_str())?.clone();
             let mut axes: Vec<i64> = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "axes")
-                .map(|a| a.get_ints().to_vec())
+                .find(|a| a.name.as_str() == "axes")
+                .map(|a| a.ints.clone())
                 .unwrap_or_default();
 
             if axes.is_empty() {
@@ -317,7 +310,7 @@ fn infer_shape(
 
         "Concat" => {
             let mut shapes = Vec::new();
-            for inp in node.get_input() {
+            for inp in node.input.as_slice() {
                 let shape = value_shapes.get(inp.as_str())?;
                 shapes.push(shape.clone());
             }
@@ -327,10 +320,11 @@ fn infer_shape(
             }
 
             let mut axis = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "axis")
-                .and_then(|a| a.has_i().then(|| a.get_i()))
+                .find(|a| a.name.as_str() == "axis")
+                .and_then(|a| if a.i != 0 { Some(a.i) } else { None })
                 .unwrap_or(0);
 
             if axis < 0 {
@@ -349,7 +343,7 @@ fn infer_shape(
         }
 
         "Reshape" => {
-            let ins = node.get_input();
+            let ins = node.input.as_slice();
             if ins.len() < 2 {
                 return None;
             }
@@ -359,27 +353,30 @@ fn infer_shape(
             let mut target: Vec<i64> = if let Some(values) = const_values.get(shape_input) {
                 values.clone()
             } else if let Some(shape_tensor) = initializers.get(shape_input) {
-                if !shape_tensor.get_raw_data().is_empty() {
-                    if shape_tensor.get_data_type() == TensorProto_DataType::INT32 {
+                if !shape_tensor.raw_data.as_slice().is_empty() {
+                    if shape_tensor.data_type == TensorProto_DataType::Int32 as i32 {
                         shape_tensor
-                            .get_raw_data()
+                            .raw_data
+                            .as_slice()
                             .chunks_exact(4)
                             .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as i64)
                             .collect()
                     } else {
                         shape_tensor
-                            .get_raw_data()
+                            .raw_data
+                            .as_slice()
                             .chunks_exact(8)
                             .map(|c| {
                                 i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
                             })
                             .collect()
                     }
-                } else if !shape_tensor.get_int64_data().is_empty() {
-                    shape_tensor.get_int64_data().to_vec()
-                } else if !shape_tensor.get_int32_data().is_empty() {
+                } else if !shape_tensor.int64_data.as_slice().is_empty() {
+                    shape_tensor.int64_data.as_slice().to_vec()
+                } else if !shape_tensor.int32_data.as_slice().is_empty() {
                     shape_tensor
-                        .get_int32_data()
+                        .int32_data
+                        .as_slice()
                         .iter()
                         .map(|&v| v as i64)
                         .collect()
@@ -409,7 +406,7 @@ fn infer_shape(
         }
 
         "Slice" => {
-            let ins = node.get_input();
+            let ins = node.input.as_slice();
             if ins.is_empty() {
                 return None;
             }
@@ -422,9 +419,9 @@ fn infer_shape(
                         return Some(v.clone());
                     }
                     if let Some(t) = initializers.get(n) {
-                        let raw = t.get_raw_data();
+                        let raw = t.raw_data.as_slice();
                         if !raw.is_empty() {
-                            if t.get_data_type() == TensorProto_DataType::INT32 {
+                            if t.data_type == TensorProto_DataType::Int32 as i32 {
                                 return Some(
                                     raw.chunks_exact(4)
                                         .map(|c| {
@@ -443,10 +440,12 @@ fn infer_shape(
                                         .collect(),
                                 );
                             }
-                        } else if !t.get_int64_data().is_empty() {
-                            return Some(t.get_int64_data().to_vec());
-                        } else if !t.get_int32_data().is_empty() {
-                            return Some(t.get_int32_data().iter().map(|&v| v as i64).collect());
+                        } else if !t.int64_data.as_slice().is_empty() {
+                            return Some(t.int64_data.as_slice().to_vec());
+                        } else if !t.int32_data.as_slice().is_empty() {
+                            return Some(
+                                t.int32_data.as_slice().iter().map(|&v| v as i64).collect(),
+                            );
                         }
                     }
                 }
@@ -552,10 +551,10 @@ pub struct OnnxConverter {
 impl OnnxConverter {
     /// Create a new converter from an ONNX model
     pub fn new(model: ModelProto) -> Result<Self, OnnxError> {
-        let graph_name = if model.has_graph() {
-            let graph = model.get_graph();
-            if graph.has_name() {
-                graph.get_name().to_string()
+        let graph_name = if model.graph.is_some() {
+            let graph = model.graph.as_ref().unwrap();
+            if !graph.name.is_empty() {
+                graph.name.as_str().to_string()
             } else {
                 "graph".to_string()
             }
@@ -582,36 +581,36 @@ impl OnnxConverter {
 
     /// Extract metadata from ONNX model
     pub fn extract_metadata(&self) -> Result<(), OnnxError> {
-        if !self.model.has_graph() {
+        if self.model.graph.is_none() {
             return Err(OnnxError::ProtobufError(
                 "Missing graph in model".to_string(),
             ));
         }
 
-        let graph = self.model.get_graph();
+        let graph = self.model.graph.as_ref().unwrap();
 
         // Print basic info
         println!("Model name: {}", self.graph.name.as_ref().unwrap());
-        println!("Inputs: {}", graph.get_input().len());
-        println!("Outputs: {}", graph.get_output().len());
-        println!("Nodes: {}", graph.get_node().len());
-        println!("Initializers: {}", graph.get_initializer().len());
+        println!("Inputs: {}", graph.input.as_slice().len());
+        println!("Outputs: {}", graph.output.as_slice().len());
+        println!("Nodes: {}", graph.node.as_slice().len());
+        println!("Initializers: {}", graph.initializer.as_slice().len());
 
         Ok(())
     }
 
     /// Convert ONNX model to GraphJson
     pub fn convert(mut self, options: &ConvertOptions) -> Result<GraphJson, OnnxError> {
-        if !self.model.has_graph() {
+        if self.model.graph.is_none() {
             return Err(OnnxError::ProtobufError(
                 "Missing graph in model".to_string(),
             ));
         }
 
         // Validate opset imports
-        for import in self.model.get_opset_import() {
-            let domain = import.get_domain();
-            let version = import.get_version();
+        for import in self.model.opset_import.as_slice() {
+            let domain = import.domain.as_str();
+            let version = import.version;
             let domain_name = if domain.is_empty() {
                 "ai.onnx".to_string()
             } else {
@@ -628,18 +627,19 @@ impl OnnxConverter {
             }
         }
 
-        let onnx_graph = self.model.get_graph();
+        let onnx_graph = self.model.graph.as_ref().unwrap();
         let mut value_name_map: HashMap<String, String> = HashMap::new();
         let mut effective_overrides = options.free_dim_overrides.clone();
         let mut value_types: HashMap<String, DataType> = HashMap::new();
 
         // Merge overrides from model metadata if present
-        for meta in self.model.get_metadata_props() {
+        for meta in self.model.metadata_props.as_slice() {
             if meta
-                .get_key()
+                .key
+                .as_str()
                 .eq_ignore_ascii_case("freedimensionoverrides")
             {
-                if let Ok(json) = serde_json::from_str::<JsonValue>(meta.get_value()) {
+                if let Ok(json) = serde_json::from_str::<JsonValue>(meta.value.as_str()) {
                     let obj = json
                         .get("freeDimensionOverrides")
                         .unwrap_or(&json)
@@ -658,9 +658,10 @@ impl OnnxConverter {
 
         // Process inputs (exclude initializers)
         let initializer_names: HashSet<String> = onnx_graph
-            .get_initializer()
+            .initializer
+            .as_slice()
             .iter()
-            .map(|init| init.get_name().to_string())
+            .map(|init| init.name.as_str().to_string())
             .collect();
 
         let default_dim_values: HashMap<&str, u32> = HashMap::from([
@@ -698,8 +699,8 @@ impl OnnxConverter {
                 None
             };
 
-        for input in onnx_graph.get_input() {
-            let raw_name = input.get_name().to_string();
+        for input in onnx_graph.input.as_slice() {
+            let raw_name = input.name.as_str().to_string();
             let name = sanitize_identifier(&raw_name);
 
             // Skip if this is an initializer (constant)
@@ -708,34 +709,37 @@ impl OnnxConverter {
             }
 
             // Get type info
-            if input.has_field_type() {
-                let type_proto = input.get_field_type();
-                if type_proto.has_tensor_type() {
-                    let tensor_type = type_proto.get_tensor_type();
-
-                    let data_type = if tensor_type.has_elem_type() {
-                        let onnx_type = tensor_type.get_elem_type() as i32;
+            if input.r#type.is_some() {
+                let type_proto = input.r#type.as_ref().unwrap();
+                if let Some(TypeProtoValue::TensorType(tensor_type)) = &type_proto.value {
+                    let data_type = if tensor_type.elem_type != 0 {
+                        let onnx_type = tensor_type.elem_type;
                         crate::onnx::types::map_onnx_data_type(onnx_type)?
                     } else {
                         DataType::Float32 // Default
                     };
 
-                    let shape = if tensor_type.has_shape() {
-                        let shape_proto = tensor_type.get_shape();
+                    let shape = if let Some(shape_proto) = &tensor_type.shape {
                         let mut resolved = Vec::new();
-                        for dim in shape_proto.get_dim() {
-                            if dim.has_dim_value() {
-                                resolved.push(dim.get_dim_value() as u32);
-                            } else if dim.has_dim_param() {
-                                let dim_param = dim.get_dim_param();
-                                if let Some(v) =
-                                    resolve_dim_override(dim_param, &mut effective_overrides)
-                                {
-                                    resolved.push(v);
-                                } else {
-                                    missing_dims.push((raw_name.clone(), dim_param.to_string()));
-                                    resolved.clear();
-                                    break;
+                        for dim in &shape_proto.dim {
+                            if let Some(dim_value) = &dim.value {
+                                match dim_value {
+                                    DimensionValue::DimValue(v) => {
+                                        resolved.push(*v as u32);
+                                    }
+                                    DimensionValue::DimParam(dim_param) => {
+                                        if let Some(v) = resolve_dim_override(
+                                            dim_param,
+                                            &mut effective_overrides,
+                                        ) {
+                                            resolved.push(v);
+                                        } else {
+                                            missing_dims
+                                                .push((raw_name.clone(), dim_param.to_string()));
+                                            resolved.clear();
+                                            break;
+                                        }
+                                    }
                                 }
                             } else {
                                 missing_dims.push((raw_name.clone(), "<unknown>".to_string()));
@@ -793,30 +797,35 @@ impl OnnxConverter {
         }
 
         // Process initializers (constants/weights)
-        for initializer in onnx_graph.get_initializer() {
-            let name = sanitize_identifier(initializer.get_name());
-            let raw_data = initializer.get_raw_data();
+        for initializer in onnx_graph.initializer.as_slice() {
+            let name = sanitize_identifier(initializer.name.as_str());
+            let raw_data = initializer.raw_data.as_slice();
 
             // Skip initializers with no data (check both raw_data and typed data fields)
             let has_data = !raw_data.is_empty()
-                || !initializer.get_float_data().is_empty()
-                || !initializer.get_int32_data().is_empty()
-                || !initializer.get_int64_data().is_empty()
-                || !initializer.get_double_data().is_empty();
+                || !initializer.float_data.as_slice().is_empty()
+                || !initializer.int32_data.as_slice().is_empty()
+                || !initializer.int64_data.as_slice().is_empty()
+                || !initializer.double_data.as_slice().is_empty();
 
             if !has_data {
                 eprintln!("Warning: Skipping initializer '{}' with no data", name);
                 continue;
             }
 
-            let onnx_type = initializer.get_data_type() as i32;
+            let onnx_type = initializer.data_type;
             let data_type = crate::onnx::types::map_onnx_data_type(onnx_type)?;
-            let shape: Vec<u32> = initializer.get_dims().iter().map(|d| *d as u32).collect();
+            let shape: Vec<u32> = initializer
+                .dims
+                .as_slice()
+                .iter()
+                .map(|d| *d as u32)
+                .collect();
 
             let init = if options.extract_weights {
                 // External weights reference (use original name for weights file)
                 crate::ast::ConstInit::Weights {
-                    r#ref: sanitize_identifier(initializer.get_name()),
+                    r#ref: sanitize_identifier(initializer.name.as_str()),
                 }
             } else {
                 // Inline bytes
@@ -833,9 +842,9 @@ impl OnnxConverter {
                     init,
                 });
 
-            value_name_map.insert(initializer.get_name().to_string(), name.clone());
+            value_name_map.insert(initializer.name.as_str().to_string(), name.clone());
             value_name_map.insert(name.clone(), name.clone());
-            value_types.insert(initializer.get_name().to_string(), data_type.clone());
+            value_types.insert(initializer.name.as_str().to_string(), data_type.clone());
             value_types.insert(name, data_type);
         }
 
@@ -844,18 +853,18 @@ impl OnnxConverter {
 
         // Build initializers map for resolving constant shapes
         let mut initializers_map = std::collections::HashMap::new();
-        for initializer in onnx_graph.get_initializer() {
+        for initializer in onnx_graph.initializer.as_slice() {
             // Skip initializers with no data (check both raw_data and typed data fields)
-            let has_data = !initializer.get_raw_data().is_empty()
-                || !initializer.get_float_data().is_empty()
-                || !initializer.get_int32_data().is_empty()
-                || !initializer.get_int64_data().is_empty()
-                || !initializer.get_double_data().is_empty();
+            let has_data = !initializer.raw_data.as_slice().is_empty()
+                || !initializer.float_data.as_slice().is_empty()
+                || !initializer.int32_data.as_slice().is_empty()
+                || !initializer.int64_data.as_slice().is_empty()
+                || !initializer.double_data.as_slice().is_empty();
 
             if !has_data {
                 continue;
             }
-            initializers_map.insert(initializer.get_name().to_string(), initializer);
+            initializers_map.insert(initializer.name.as_str().to_string(), initializer);
         }
 
         // Build value_shapes map from value_info and inputs for shape inference
@@ -867,29 +876,36 @@ impl OnnxConverter {
                 continue;
             }
             if let Some(input) = onnx_graph
-                .get_input()
+                .input
+                .as_slice()
                 .iter()
-                .find(|i| i.get_name() == raw_name)
+                .find(|i| i.name.as_str() == raw_name)
             {
-                if input.has_field_type() && input.get_field_type().has_tensor_type() {
-                    let type_proto = input.get_field_type().get_tensor_type();
-                    if type_proto.has_shape() {
-                        let mut shape: Vec<i64> = Vec::new();
-                        for dim in type_proto.get_shape().get_dim() {
-                            if dim.has_dim_value() {
-                                shape.push(dim.get_dim_value());
-                            } else if dim.has_dim_param() {
-                                if let Some(v) = resolve_dim_override(
-                                    dim.get_dim_param(),
-                                    &mut effective_overrides,
-                                ) {
-                                    shape.push(v as i64);
+                if let Some(type_proto) = &input.r#type {
+                    if let Some(TypeProtoValue::TensorType(tensor_type)) = &type_proto.value {
+                        if let Some(shape_proto) = &tensor_type.shape {
+                            let mut shape: Vec<i64> = Vec::new();
+                            for dim in &shape_proto.dim {
+                                if let Some(dim_value) = &dim.value {
+                                    match dim_value {
+                                        DimensionValue::DimValue(v) => {
+                                            shape.push(*v);
+                                        }
+                                        DimensionValue::DimParam(dim_param) => {
+                                            if let Some(v) = resolve_dim_override(
+                                                dim_param,
+                                                &mut effective_overrides,
+                                            ) {
+                                                shape.push(v as i64);
+                                            }
+                                        }
+                                    }
                                 }
                             }
-                        }
-                        if !shape.is_empty() {
-                            value_shapes.insert(raw_name.clone(), shape.clone());
-                            value_shapes.insert(mapped_name.clone(), shape);
+                            if !shape.is_empty() {
+                                value_shapes.insert(raw_name.clone(), shape.clone());
+                                value_shapes.insert(mapped_name.clone(), shape);
+                            }
                         }
                     }
                 }
@@ -897,50 +913,57 @@ impl OnnxConverter {
         }
 
         // Add initializer shapes
-        for initializer in onnx_graph.get_initializer() {
+        for initializer in onnx_graph.initializer.as_slice() {
             // Skip initializers with no data (check both raw_data and typed data fields)
-            let has_data = !initializer.get_raw_data().is_empty()
-                || !initializer.get_float_data().is_empty()
-                || !initializer.get_int32_data().is_empty()
-                || !initializer.get_int64_data().is_empty()
-                || !initializer.get_double_data().is_empty();
+            let has_data = !initializer.raw_data.as_slice().is_empty()
+                || !initializer.float_data.as_slice().is_empty()
+                || !initializer.int32_data.as_slice().is_empty()
+                || !initializer.int64_data.as_slice().is_empty()
+                || !initializer.double_data.as_slice().is_empty();
 
             if !has_data {
                 continue;
             }
-            let shape: Vec<i64> = initializer.get_dims().to_vec();
-            value_shapes.insert(initializer.get_name().to_string(), shape);
+            let shape: Vec<i64> = initializer.dims.as_slice().to_vec();
+            value_shapes.insert(initializer.name.as_str().to_string(), shape);
         }
 
         // Add value_info shapes (intermediate tensors from shape inference)
         // Try to resolve dynamic dimensions using overrides
-        for value_info in onnx_graph.get_value_info() {
-            if value_info.has_field_type() && value_info.get_field_type().has_tensor_type() {
-                let type_proto = value_info.get_field_type().get_tensor_type();
-                if type_proto.has_shape() {
-                    let mut shape: Vec<i64> = Vec::new();
-                    let mut unknown = false;
+        for value_info in onnx_graph.value_info.as_slice() {
+            if let Some(type_proto) = &value_info.r#type {
+                if let Some(TypeProtoValue::TensorType(tensor_type)) = &type_proto.value {
+                    if let Some(shape_proto) = &tensor_type.shape {
+                        let mut shape: Vec<i64> = Vec::new();
+                        let mut unknown = false;
 
-                    for d in type_proto.get_shape().get_dim() {
-                        if d.has_dim_value() {
-                            shape.push(d.get_dim_value());
-                        } else if d.has_dim_param() {
-                            if let Some(v) =
-                                resolve_dim_override(d.get_dim_param(), &mut effective_overrides)
-                            {
-                                shape.push(v as i64);
+                        for dim in &shape_proto.dim {
+                            if let Some(dim_value) = &dim.value {
+                                match dim_value {
+                                    DimensionValue::DimValue(v) => {
+                                        shape.push(*v);
+                                    }
+                                    DimensionValue::DimParam(dim_param) => {
+                                        if let Some(v) = resolve_dim_override(
+                                            dim_param,
+                                            &mut effective_overrides,
+                                        ) {
+                                            shape.push(v as i64);
+                                        } else {
+                                            unknown = true;
+                                            break;
+                                        }
+                                    }
+                                }
                             } else {
                                 unknown = true;
                                 break;
                             }
-                        } else {
-                            unknown = true;
-                            break;
                         }
-                    }
 
-                    if !unknown && !shape.is_empty() && shape.iter().all(|&d| d > 0) {
-                        value_shapes.insert(value_info.get_name().to_string(), shape);
+                        if !unknown && !shape.is_empty() && shape.iter().all(|&d| d > 0) {
+                            value_shapes.insert(value_info.name.as_str().to_string(), shape);
+                        }
                     }
                 }
             }
@@ -949,12 +972,12 @@ impl OnnxConverter {
         // Seed const values with integer initializers and Constant nodes
         let mut const_values: HashMap<String, Vec<i64>> = HashMap::new();
         for (name, initializer) in &initializers_map {
-            if initializer.get_data_type() == TensorProto_DataType::INT64
-                || initializer.get_data_type() == TensorProto_DataType::INT32
+            if initializer.data_type == TensorProto_DataType::Int64 as i32
+                || initializer.data_type == TensorProto_DataType::Int32 as i32
             {
-                let raw = initializer.get_raw_data();
+                let raw = initializer.raw_data.as_slice();
                 let values = if !raw.is_empty() {
-                    if initializer.get_data_type() == TensorProto_DataType::INT32 {
+                    if initializer.data_type == TensorProto_DataType::Int32 as i32 {
                         raw.chunks_exact(4)
                             .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as i64)
                             .collect()
@@ -965,11 +988,12 @@ impl OnnxConverter {
                             })
                             .collect()
                     }
-                } else if !initializer.get_int64_data().is_empty() {
-                    initializer.get_int64_data().to_vec()
-                } else if !initializer.get_int32_data().is_empty() {
+                } else if !initializer.int64_data.as_slice().is_empty() {
+                    initializer.int64_data.as_slice().to_vec()
+                } else if !initializer.int32_data.as_slice().is_empty() {
                     initializer
-                        .get_int32_data()
+                        .int32_data
+                        .as_slice()
                         .iter()
                         .map(|&v| v as i64)
                         .collect()
@@ -983,20 +1007,21 @@ impl OnnxConverter {
             }
         }
 
-        for node in onnx_graph.get_node() {
-            if node.get_op_type() == "Constant" {
+        for node in onnx_graph.node.as_slice() {
+            if node.op_type.as_str() == "Constant" {
                 if let Some(attr) = node
-                    .get_attribute()
+                    .attribute
+                    .as_slice()
                     .iter()
-                    .find(|a| a.get_name() == "value" && a.has_t())
+                    .find(|a| a.name.as_str() == "value" && a.t.is_some())
                 {
-                    let tensor = attr.get_t();
-                    if tensor.get_data_type() == TensorProto_DataType::INT64
-                        || tensor.get_data_type() == TensorProto_DataType::INT32
+                    let tensor = attr.t.as_ref().unwrap();
+                    if tensor.data_type == TensorProto_DataType::Int64 as i32
+                        || tensor.data_type == TensorProto_DataType::Int32 as i32
                     {
-                        let raw = tensor.get_raw_data();
+                        let raw = tensor.raw_data.as_slice();
                         let values = if !raw.is_empty() {
-                            if tensor.get_data_type() == TensorProto_DataType::INT32 {
+                            if tensor.data_type == TensorProto_DataType::Int32 as i32 {
                                 raw.chunks_exact(4)
                                     .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as i64)
                                     .collect()
@@ -1009,15 +1034,20 @@ impl OnnxConverter {
                                     })
                                     .collect()
                             }
-                        } else if !tensor.get_int64_data().is_empty() {
-                            tensor.get_int64_data().to_vec()
-                        } else if !tensor.get_int32_data().is_empty() {
-                            tensor.get_int32_data().iter().map(|&v| v as i64).collect()
+                        } else if !tensor.int64_data.as_slice().is_empty() {
+                            tensor.int64_data.as_slice().to_vec()
+                        } else if !tensor.int32_data.as_slice().is_empty() {
+                            tensor
+                                .int32_data
+                                .as_slice()
+                                .iter()
+                                .map(|&v| v as i64)
+                                .collect()
                         } else {
                             Vec::new()
                         };
 
-                        if let Some(out) = node.get_output().first() {
+                        if let Some(out) = node.output.as_slice().first() {
                             if !values.is_empty() {
                                 const_values.insert(out.to_string(), values);
                                 value_types.insert(out.to_string(), DataType::Int64);
@@ -1051,9 +1081,10 @@ impl OnnxConverter {
                 for iteration in 0..max_iterations {
                     let initial_count = value_shapes.len();
 
-                    for onnx_node in onnx_graph.get_node() {
+                    for onnx_node in onnx_graph.node.as_slice() {
                         let all_outputs_known = onnx_node
-                            .get_output()
+                            .output
+                            .as_slice()
                             .iter()
                             .all(|out| value_shapes.contains_key(out.as_str()));
                         if all_outputs_known {
@@ -1063,7 +1094,7 @@ impl OnnxConverter {
                         if let Some(inferred) =
                             infer_shape(onnx_node, &value_shapes, &initializers_map, &const_values)
                         {
-                            if let Some(output_name) = onnx_node.get_output().first() {
+                            if let Some(output_name) = onnx_node.output.as_slice().first() {
                                 value_shapes
                                     .entry(output_name.to_string())
                                     .or_insert(inferred);
@@ -1079,7 +1110,7 @@ impl OnnxConverter {
                         eprintln!(
                             "Warning: Shape propagation reached max iterations ({}/{})",
                             value_shapes.len(),
-                            onnx_graph.get_node().len()
+                            onnx_graph.node.as_slice().len()
                         );
                     }
                 }
@@ -1127,12 +1158,13 @@ impl OnnxConverter {
             let consts_before = const_values.len();
 
             // Extend const value map for const-foldable shapes
-            for node in onnx_graph.get_node() {
-                let op_type = node.get_op_type();
+            for node in onnx_graph.node.as_slice() {
+                let op_type = node.op_type.as_str();
                 if op_type == "Shape" {
-                    if let (Some(inp), Some(out)) =
-                        (node.get_input().first(), node.get_output().first())
-                    {
+                    if let (Some(inp), Some(out)) = (
+                        node.input.as_slice().first(),
+                        node.output.as_slice().first(),
+                    ) {
                         let out = out.to_string();
                         if let Some(shape) = value_shapes.get(inp).cloned() {
                             if shape.iter().all(|d| *d > 0) {
@@ -1150,18 +1182,19 @@ impl OnnxConverter {
                     }
                 } else if op_type == "Gather" {
                     if let (Some(data_name), Some(indices_name), Some(out)) = (
-                        node.get_input().first(),
-                        node.get_input().get(1),
-                        node.get_output().first(),
+                        node.input.as_slice().first(),
+                        node.input.as_slice().get(1),
+                        node.output.as_slice().first(),
                     ) {
                         if let (Some(data), Some(indices)) =
                             (const_values.get(data_name), const_values.get(indices_name))
                         {
                             let axis = node
-                                .get_attribute()
+                                .attribute
+                                .as_slice()
                                 .iter()
-                                .find(|a| a.get_name() == "axis" && a.has_i())
-                                .map(|a| a.get_i())
+                                .find(|a| a.name.as_str() == "axis" && a.i != 0)
+                                .map(|a| a.i)
                                 .unwrap_or(0);
 
                             if axis == 0 {
@@ -1195,11 +1228,17 @@ impl OnnxConverter {
                         }
                     }
                 } else if matches!(op_type, "Add" | "Sub" | "Mul" | "Div") {
-                    if node.get_input().len() >= 2 {
+                    if node.input.as_slice().len() >= 2 {
                         if let (Some(a), Some(b), Some(out)) = (
-                            node.get_input().first().and_then(|i| const_values.get(i)),
-                            node.get_input().get(1).and_then(|i| const_values.get(i)),
-                            node.get_output().first(),
+                            node.input
+                                .as_slice()
+                                .first()
+                                .and_then(|i| const_values.get(i)),
+                            node.input
+                                .as_slice()
+                                .get(1)
+                                .and_then(|i| const_values.get(i)),
+                            node.output.as_slice().first(),
                         ) {
                             let mut result_vals = Vec::new();
                             let (a_len, b_len) = (a.len(), b.len());
@@ -1235,7 +1274,8 @@ impl OnnxConverter {
                                     .entry(sanitize_identifier(out))
                                     .or_insert(out_shape);
                                 if let Some(dtype) = node
-                                    .get_input()
+                                    .input
+                                    .as_slice()
                                     .iter()
                                     .find_map(|i| value_types.get(i).cloned())
                                 {
@@ -1245,9 +1285,10 @@ impl OnnxConverter {
                         }
                     }
                 } else if op_type == "Cast" || op_type == "Unsqueeze" || op_type == "Squeeze" {
-                    if let (Some(inp), Some(out)) =
-                        (node.get_input().first(), node.get_output().first())
-                    {
+                    if let (Some(inp), Some(out)) = (
+                        node.input.as_slice().first(),
+                        node.output.as_slice().first(),
+                    ) {
                         if let Some(vals) = const_values.get(inp).cloned() {
                             const_values.insert(out.to_string(), vals.clone());
                             let out_shape = if vals.len() == 1 {
@@ -1263,11 +1304,11 @@ impl OnnxConverter {
                     }
                 } else if op_type == "Range" {
                     // Range(start, limit, delta) -> [start, start+delta, start+2*delta, ...]
-                    if node.get_input().len() == 3 {
+                    if node.input.as_slice().len() == 3 {
                         if let (Some(start_name), Some(limit_name), Some(delta_name)) = (
-                            node.get_input().first(),
-                            node.get_input().get(1),
-                            node.get_input().get(2),
+                            node.input.as_slice().first(),
+                            node.input.as_slice().get(1),
+                            node.input.as_slice().get(2),
                         ) {
                             if let (Some(start_vals), Some(limit_vals), Some(delta_vals)) = (
                                 const_values.get(start_name),
@@ -1297,7 +1338,7 @@ impl OnnxConverter {
                                         }
                                     }
 
-                                    if let Some(out) = node.get_output().first() {
+                                    if let Some(out) = node.output.as_slice().first() {
                                         const_values.insert(out.to_string(), range_vals.clone());
                                         let out_shape = vec![range_vals.len() as i64];
                                         value_shapes
@@ -1314,10 +1355,10 @@ impl OnnxConverter {
                     }
                 } else if op_type == "Concat" {
                     // Concatenate constant inputs (often used to build shape tensors)
-                    if let Some(out) = node.get_output().first() {
+                    if let Some(out) = node.output.as_slice().first() {
                         let mut concatenated: Vec<i64> = Vec::new();
                         let mut all_const = true;
-                        for inp in node.get_input() {
+                        for inp in node.input.as_slice() {
                             if let Some(vals) = const_values.get(inp) {
                                 concatenated.extend_from_slice(vals);
                             } else {
@@ -1328,10 +1369,11 @@ impl OnnxConverter {
 
                         // Handle axis=0 or axis=-1 (common for shape building)
                         let axis = node
-                            .get_attribute()
+                            .attribute
+                            .as_slice()
                             .iter()
-                            .find(|a| a.get_name() == "axis" && a.has_i())
-                            .map(|a| a.get_i())
+                            .find(|a| a.name.as_str() == "axis" && a.i != 0)
+                            .map(|a| a.i)
                             .unwrap_or(0);
 
                         if all_const && (axis == 0 || axis == -1) {
@@ -1348,24 +1390,24 @@ impl OnnxConverter {
                     }
                 } else if op_type == "ConstantOfShape" {
                     // ConstantOfShape(shape) -> tensor filled with constant value
-                    if let Some(shape_name) = node.get_input().first() {
+                    if let Some(shape_name) = node.input.as_slice().first() {
                         if let Some(shape_vals) = const_values.get(shape_name).cloned() {
                             // Get the fill value from attributes (default is 0)
                             let mut fill_value = 0i64;
-                            for attr in node.get_attribute() {
-                                if attr.get_name() == "value" && attr.has_t() {
-                                    let value_tensor = attr.get_t();
-                                    if value_tensor.get_data_type()
-                                        == onnx::onnx::TensorProto_DataType::INT64
+                            for attr in node.attribute.as_slice() {
+                                if attr.name.as_str() == "value" && attr.t.is_some() {
+                                    let value_tensor = attr.t.as_ref().unwrap();
+                                    if value_tensor.data_type
+                                        == crate::protos::onnx::TensorProto_DataType::Int64 as i32
                                     {
-                                        let raw = value_tensor.get_raw_data();
+                                        let raw = value_tensor.raw_data.as_slice();
                                         if !raw.is_empty() && raw.len() >= 8 {
                                             fill_value = i64::from_le_bytes([
                                                 raw[0], raw[1], raw[2], raw[3], raw[4], raw[5],
                                                 raw[6], raw[7],
                                             ]);
-                                        } else if !value_tensor.get_int64_data().is_empty() {
-                                            fill_value = value_tensor.get_int64_data()[0];
+                                        } else if !value_tensor.int64_data.as_slice().is_empty() {
+                                            fill_value = value_tensor.int64_data.as_slice()[0];
                                         }
                                     }
                                 }
@@ -1381,7 +1423,7 @@ impl OnnxConverter {
                             if numel > 0 && numel < 1_000_000 {
                                 // Reasonable size limit
                                 let filled_tensor = vec![fill_value; numel as usize];
-                                if let Some(out) = node.get_output().first() {
+                                if let Some(out) = node.output.as_slice().first() {
                                     const_values.insert(out.to_string(), filled_tensor);
                                     value_shapes
                                         .entry(out.to_string())
@@ -1396,11 +1438,17 @@ impl OnnxConverter {
                     }
                 } else if op_type == "Equal" {
                     // Equal(a, b) -> boolean tensor (represented as i64: 1 for true, 0 for false)
-                    if node.get_input().len() >= 2 {
+                    if node.input.as_slice().len() >= 2 {
                         if let (Some(a), Some(b), Some(out)) = (
-                            node.get_input().first().and_then(|i| const_values.get(i)),
-                            node.get_input().get(1).and_then(|i| const_values.get(i)),
-                            node.get_output().first(),
+                            node.input
+                                .as_slice()
+                                .first()
+                                .and_then(|i| const_values.get(i)),
+                            node.input
+                                .as_slice()
+                                .get(1)
+                                .and_then(|i| const_values.get(i)),
+                            node.output.as_slice().first(),
                         ) {
                             let mut result_vals = Vec::new();
                             let (a_len, b_len) = (a.len(), b.len());
@@ -1437,12 +1485,21 @@ impl OnnxConverter {
                     }
                 } else if op_type == "Where" {
                     // Where(condition, x, y) -> select x where condition is true, y otherwise
-                    if node.get_input().len() >= 3 {
+                    if node.input.as_slice().len() >= 3 {
                         if let (Some(cond), Some(x), Some(y), Some(out)) = (
-                            node.get_input().first().and_then(|i| const_values.get(i)),
-                            node.get_input().get(1).and_then(|i| const_values.get(i)),
-                            node.get_input().get(2).and_then(|i| const_values.get(i)),
-                            node.get_output().first(),
+                            node.input
+                                .as_slice()
+                                .first()
+                                .and_then(|i| const_values.get(i)),
+                            node.input
+                                .as_slice()
+                                .get(1)
+                                .and_then(|i| const_values.get(i)),
+                            node.input
+                                .as_slice()
+                                .get(2)
+                                .and_then(|i| const_values.get(i)),
+                            node.output.as_slice().first(),
                         ) {
                             let mut result_vals = Vec::new();
                             let (cond_len, x_len, y_len) = (cond.len(), x.len(), y.len());
@@ -1490,9 +1547,9 @@ impl OnnxConverter {
             }
         }
 
-        for onnx_node in onnx_graph.get_node() {
+        for onnx_node in onnx_graph.node.as_slice() {
             // If all outputs are compile-time constants, emit them directly and skip conversion
-            let outputs = onnx_node.get_output();
+            let outputs = onnx_node.output.as_slice();
             if !outputs.is_empty()
                 && outputs
                     .iter()
@@ -1619,8 +1676,8 @@ impl OnnxConverter {
         }
 
         // Process outputs
-        for output in onnx_graph.get_output() {
-            let onnx_name = output.get_name();
+        for output in onnx_graph.output.as_slice() {
+            let onnx_name = output.name.as_str();
             if let Some(mapped) = value_name_map.get(onnx_name) {
                 self.graph
                     .outputs
@@ -1647,8 +1704,8 @@ pub fn convert_onnx<P: AsRef<Path>>(
     let onnx_bytes = fs::read(onnx_path_ref)?;
 
     // Parse protobuf
-    let mut model: ModelProto = protobuf::parse_from_bytes(&onnx_bytes)
-        .map_err(|e| OnnxError::ProtobufError(e.to_string()))?;
+    let mut model: ModelProto =
+        ModelProto::decode(&onnx_bytes[..]).map_err(|e| OnnxError::ProtobufError(e.to_string()))?;
 
     // Apply constant folding if optimize flag is set
     if options.optimize {
@@ -1713,13 +1770,13 @@ fn extract_weights_from_onnx(
 ) -> Result<(), OnnxError> {
     use crate::weights::{TensorEntry, WeightsManifest};
 
-    if !model.has_graph() {
+    if model.graph.is_none() {
         return Err(OnnxError::ProtobufError(
             "Missing graph in model".to_string(),
         ));
     }
 
-    let onnx_graph = model.get_graph();
+    let onnx_graph = model.graph.as_ref().unwrap();
     let mut manifest = WeightsManifest {
         format: "wg-weights-manifest".to_string(),
         version: 1,
@@ -1731,23 +1788,28 @@ fn extract_weights_from_onnx(
     let mut current_offset = 0u64;
 
     // Process each initializer
-    for initializer in onnx_graph.get_initializer() {
-        let name = sanitize_identifier(initializer.get_name());
+    for initializer in onnx_graph.initializer.as_slice() {
+        let name = sanitize_identifier(initializer.name.as_str());
 
         // Convert ONNX data type enum to i32, then to WebNN DataType
-        let onnx_type = initializer.get_data_type() as i32;
+        let onnx_type = initializer.data_type;
         let data_type = crate::onnx::types::map_onnx_data_type(onnx_type)?;
 
-        let shape: Vec<u32> = initializer.get_dims().iter().map(|d| *d as u32).collect();
-        let raw_data = initializer.get_raw_data();
+        let shape: Vec<u32> = initializer
+            .dims
+            .as_slice()
+            .iter()
+            .map(|d| *d as u32)
+            .collect();
+        let raw_data = initializer.raw_data.as_slice();
 
         // Convert typed data to bytes if raw_data is empty
         let bytes_to_write: Vec<u8> = if raw_data.is_empty() {
             // Try to extract from typed data fields
-            let int64_data = initializer.get_int64_data();
-            let float_data = initializer.get_float_data();
-            let int32_data = initializer.get_int32_data();
-            let double_data = initializer.get_double_data();
+            let int64_data = initializer.int64_data.as_slice();
+            let float_data = initializer.float_data.as_slice();
+            let int32_data = initializer.int32_data.as_slice();
+            let double_data = initializer.double_data.as_slice();
 
             if !int64_data.is_empty() {
                 // Convert int64_data to bytes (little-endian)

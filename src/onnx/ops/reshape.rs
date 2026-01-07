@@ -3,7 +3,7 @@
 use crate::ast::{ConstDecl, ConstInit, Node};
 use crate::onnx::convert::{sanitize_identifier, OnnxError};
 use crate::onnx::ops::{ConversionContext, ConversionResult, OpHandler};
-use onnx::onnx::{NodeProto, TensorProto_DataType};
+use crate::protos::onnx::{NodeProto, TensorProto_DataType};
 use serde_json::Map;
 
 pub struct ReshapeHandler;
@@ -28,9 +28,9 @@ impl OpHandler for ReshapeHandler {
         node: &NodeProto,
         context: &ConversionContext<'a>,
     ) -> Result<ConversionResult, OnnxError> {
-        let op_type = node.get_op_type();
-        let node_name = if node.has_name() {
-            node.get_name().to_string()
+        let op_type = node.op_type.as_str();
+        let node_name = if !node.name.is_empty() {
+            node.name.as_str().to_string()
         } else {
             "unnamed".to_string()
         };
@@ -59,10 +59,11 @@ impl ReshapeHandler {
         context: &ConversionContext,
     ) -> Result<Vec<i64>, OnnxError> {
         if let Some(attr_axes) = node
-            .get_attribute()
+            .attribute
+            .as_slice()
             .iter()
-            .find(|a| a.get_name() == "axes")
-            .map(|a| a.get_ints().to_vec())
+            .find(|a| a.name.as_str() == "axes")
+            .map(|a| a.ints.clone())
         {
             return Ok(if attr_axes.is_empty() {
                 vec![0]
@@ -71,8 +72,8 @@ impl ReshapeHandler {
             });
         }
 
-        if node.get_input().len() >= 2 {
-            let name = node.get_input()[1].to_string();
+        if node.input.as_slice().len() >= 2 {
+            let name = node.input.as_slice()[1].to_string();
             if let Some(vals) = context.const_values.get(&name) {
                 return Ok(if vals.is_empty() {
                     vec![0]
@@ -81,7 +82,7 @@ impl ReshapeHandler {
                 });
             }
             if let Some(t) = context.initializers.get(&name) {
-                let raw = t.get_raw_data();
+                let raw = t.raw_data.as_slice();
                 if !raw.is_empty() {
                     let mut axes: Vec<i64> = raw
                         .chunks_exact(8)
@@ -93,14 +94,15 @@ impl ReshapeHandler {
                         axes.push(0);
                     }
                     return Ok(axes);
-                } else if !t.get_int64_data().is_empty() {
-                    let mut axes = t.get_int64_data().to_vec();
+                } else if !t.int64_data.as_slice().is_empty() {
+                    let mut axes = t.int64_data.as_slice().to_vec();
                     if axes.is_empty() {
                         axes.push(0);
                     }
                     return Ok(axes);
-                } else if !t.get_int32_data().is_empty() {
-                    let mut axes: Vec<i64> = t.get_int32_data().iter().map(|&v| v as i64).collect();
+                } else if !t.int32_data.as_slice().is_empty() {
+                    let mut axes: Vec<i64> =
+                        t.int32_data.as_slice().iter().map(|&v| v as i64).collect();
                     if axes.is_empty() {
                         axes.push(0);
                     }
@@ -125,7 +127,7 @@ impl ReshapeHandler {
         node_name: &str,
         context: &crate::onnx::ops::ConversionContext<'a>,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() < 2 {
             return Err(OnnxError::InvalidShape(format!(
                 "Reshape expects 2 inputs (data, shape), got {}",
@@ -133,10 +135,10 @@ impl ReshapeHandler {
             )));
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let data_input_raw = inputs[0].to_string();
@@ -148,10 +150,10 @@ impl ReshapeHandler {
             if let Some(values) = context.const_values.get(&shape_input_raw) {
                 values.clone()
             } else if let Some(initializer) = context.initializers.get(shape_input_raw.as_str()) {
-                let raw_data = initializer.get_raw_data();
+                let raw_data = initializer.raw_data.as_slice();
                 if !raw_data.is_empty() {
-                    match initializer.get_data_type() {
-                        TensorProto_DataType::INT32 => raw_data
+                    match initializer.data_type {
+                        x if x == TensorProto_DataType::Int32 as i32 => raw_data
                             .chunks_exact(4)
                             .map(|chunk| {
                                 i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as i64
@@ -167,11 +169,12 @@ impl ReshapeHandler {
                             })
                             .collect(),
                     }
-                } else if !initializer.get_int64_data().is_empty() {
-                    initializer.get_int64_data().to_vec()
-                } else if !initializer.get_int32_data().is_empty() {
+                } else if !initializer.int64_data.as_slice().is_empty() {
+                    initializer.int64_data.as_slice().to_vec()
+                } else if !initializer.int32_data.as_slice().is_empty() {
                     initializer
-                        .get_int32_data()
+                        .int32_data
+                        .as_slice()
                         .iter()
                         .map(|&v| v as i64)
                         .collect()
@@ -332,7 +335,7 @@ impl ReshapeHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -348,7 +351,7 @@ impl ReshapeHandler {
         node_name: &str,
         context: &crate::onnx::ops::ConversionContext<'a>,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() < 2 {
             return Err(OnnxError::InvalidShape(format!(
                 "Expand expects 2 inputs (data, shape), got {}",
@@ -356,10 +359,10 @@ impl ReshapeHandler {
             )));
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let data_input_raw = inputs[0].to_string();
@@ -370,10 +373,10 @@ impl ReshapeHandler {
             if let Some(values) = context.const_values.get(&shape_input_raw) {
                 values.clone()
             } else if let Some(initializer) = context.initializers.get(shape_input_raw.as_str()) {
-                let raw_data = initializer.get_raw_data();
+                let raw_data = initializer.raw_data.as_slice();
                 if !raw_data.is_empty() {
-                    match initializer.get_data_type() {
-                        TensorProto_DataType::INT32 => raw_data
+                    match initializer.data_type {
+                        x if x == TensorProto_DataType::Int32 as i32 => raw_data
                             .chunks_exact(4)
                             .map(|chunk| {
                                 i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as i64
@@ -389,11 +392,12 @@ impl ReshapeHandler {
                             })
                             .collect(),
                     }
-                } else if !initializer.get_int64_data().is_empty() {
-                    initializer.get_int64_data().to_vec()
-                } else if !initializer.get_int32_data().is_empty() {
+                } else if !initializer.int64_data.as_slice().is_empty() {
+                    initializer.int64_data.as_slice().to_vec()
+                } else if !initializer.int32_data.as_slice().is_empty() {
                     initializer
-                        .get_int32_data()
+                        .int32_data
+                        .as_slice()
                         .iter()
                         .map(|&v| v as i64)
                         .collect()
@@ -406,7 +410,7 @@ impl ReshapeHandler {
 
         if shape_values.is_empty() {
             return Err(OnnxError::InvalidShape(format!(
-                "Expand shape input '{}' must be constant for WebNN",
+                "Expand shape input '{}' must be constant for WebNN. Consider using --override-dim to resolve dynamic dimensions.",
                 shape_input_raw
             )));
         }
@@ -425,7 +429,7 @@ impl ReshapeHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -446,7 +450,7 @@ impl ReshapeHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() != 1 {
             return Err(OnnxError::InvalidShape(format!(
                 "Transpose expects 1 input, got {}",
@@ -456,16 +460,16 @@ impl ReshapeHandler {
 
         // Extract perm attribute (permutation)
         let mut perm: Option<Vec<i64>> = None;
-        for attr in node.get_attribute() {
-            if attr.get_name() == "perm" {
-                perm = Some(attr.get_ints().to_vec());
+        for attr in node.attribute.as_slice() {
+            if attr.name.as_str() == "perm" {
+                perm = Some(attr.ints.clone());
             }
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0 = context.resolve_input(&inputs[0]);
@@ -483,7 +487,7 @@ impl ReshapeHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -499,7 +503,7 @@ impl ReshapeHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() < 2 {
             return Err(OnnxError::InvalidShape(format!(
                 "Concat expects at least 2 inputs, got {}",
@@ -509,16 +513,16 @@ impl ReshapeHandler {
 
         // Extract axis attribute (required in ONNX)
         let mut axis = 0i64;
-        for attr in node.get_attribute() {
-            if attr.get_name() == "axis" && attr.has_i() {
-                axis = attr.get_i();
+        for attr in node.attribute.as_slice() {
+            if attr.name.as_str() == "axis" && attr.i != 0 {
+                axis = attr.i;
             }
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let sanitized_inputs: Vec<String> =
@@ -535,7 +539,7 @@ impl ReshapeHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -551,7 +555,7 @@ impl ReshapeHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.is_empty() {
             return Err(OnnxError::InvalidShape(
                 "Split expects at least 1 input".to_string(),
@@ -562,21 +566,21 @@ impl ReshapeHandler {
         let mut axis = 0i64;
         let mut splits: Option<Vec<i64>> = None;
 
-        for attr in node.get_attribute() {
-            match attr.get_name() {
+        for attr in node.attribute.as_slice() {
+            match attr.name.as_str() {
                 "axis" => {
-                    if attr.has_i() {
-                        axis = attr.get_i();
+                    if attr.i != 0 {
+                        axis = attr.i;
                     }
                 }
                 "split" => {
-                    splits = Some(attr.get_ints().to_vec());
+                    splits = Some(attr.ints.clone());
                 }
                 _ => {}
             }
         }
 
-        let outputs = node.get_output();
+        let outputs = node.output.as_slice();
         if outputs.is_empty() {
             return Err(OnnxError::InvalidShape(
                 "Split expects at least 1 output".to_string(),
@@ -623,17 +627,17 @@ impl ReshapeHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.is_empty() {
             return Err(OnnxError::InvalidShape(
                 "Unsqueeze expects at least 1 input".to_string(),
             ));
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0 = context.resolve_input(&inputs[0]);
@@ -642,9 +646,9 @@ impl ReshapeHandler {
         // If missing/empty, default to [0] to ensure the emitted unsqueeze is valid.
         let axes_values = {
             let mut axes: Option<Vec<i64>> = None;
-            for attr in node.get_attribute() {
-                if attr.get_name() == "axes" {
-                    axes = Some(attr.get_ints().to_vec());
+            for attr in node.attribute.as_slice() {
+                if attr.name.as_str() == "axes" {
+                    axes = Some(attr.ints.clone());
                 }
             }
 
@@ -715,7 +719,7 @@ impl ReshapeHandler {
 
         result.consts.push((format!("${}", const_name), const_decl));
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -732,7 +736,7 @@ impl ReshapeHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.is_empty() {
             return Err(OnnxError::InvalidShape(
                 "Squeeze expects at least 1 input".to_string(),
@@ -741,16 +745,16 @@ impl ReshapeHandler {
 
         // Extract axes attribute (opset < 13) or use second input (opset >= 13)
         let mut axes: Option<Vec<i64>> = None;
-        for attr in node.get_attribute() {
-            if attr.get_name() == "axes" {
-                axes = Some(attr.get_ints().to_vec());
+        for attr in node.attribute.as_slice() {
+            if attr.name.as_str() == "axes" {
+                axes = Some(attr.ints.to_vec());
             }
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0 = context.resolve_input(&inputs[0]);
@@ -773,7 +777,7 @@ impl ReshapeHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -790,7 +794,7 @@ impl ReshapeHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() != 2 {
             return Err(OnnxError::InvalidShape(format!(
                 "Tile expects 2 inputs (input, repeats), got {}",
@@ -798,10 +802,10 @@ impl ReshapeHandler {
             )));
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0 = context.resolve_input(&inputs[0]);
@@ -814,16 +818,16 @@ impl ReshapeHandler {
             vals.clone()
         } else if let Some(tensor) = context.initializers.get(repeats_name) {
             // Read from initializer
-            let raw = tensor.get_raw_data();
+            let raw = tensor.raw_data.as_slice();
             if !raw.is_empty() {
-                match tensor.get_data_type() {
-                    TensorProto_DataType::INT64 => raw
+                match tensor.data_type {
+                    x if x == TensorProto_DataType::Int64 as i32 => raw
                         .chunks_exact(8)
                         .map(|c| {
                             i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
                         })
                         .collect(),
-                    TensorProto_DataType::INT32 => raw
+                    x if x == TensorProto_DataType::Int32 as i32 => raw
                         .chunks_exact(4)
                         .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as i64)
                         .collect(),
@@ -833,10 +837,15 @@ impl ReshapeHandler {
                         ))
                     }
                 }
-            } else if !tensor.get_int64_data().is_empty() {
-                tensor.get_int64_data().to_vec()
-            } else if !tensor.get_int32_data().is_empty() {
-                tensor.get_int32_data().iter().map(|&v| v as i64).collect()
+            } else if !tensor.int64_data.as_slice().is_empty() {
+                tensor.int64_data.as_slice().to_vec()
+            } else if !tensor.int32_data.as_slice().is_empty() {
+                tensor
+                    .int32_data
+                    .as_slice()
+                    .iter()
+                    .map(|&v| v as i64)
+                    .collect()
             } else {
                 return Err(OnnxError::InvalidShape(
                     "Tile repeats tensor has no data".to_string(),
@@ -859,7 +868,7 @@ impl ReshapeHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -878,33 +887,34 @@ impl ReshapeHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use onnx::onnx::{AttributeProto, NodeProto};
+    use crate::protos::onnx::{AttributeProto, NodeProto};
 
     fn create_test_node(op_type: &str, inputs: Vec<&str>, outputs: Vec<&str>) -> NodeProto {
-        let mut node = NodeProto::new();
-        node.set_op_type(op_type.to_string());
-        node.set_name(format!("test_{}", op_type.to_lowercase()));
-        node.set_input(protobuf::RepeatedField::from_vec(
-            inputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            outputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node
+        NodeProto {
+            op_type: op_type.to_string(),
+            name: format!("test_{}", op_type.to_lowercase()),
+            input: inputs.iter().map(|s| s.to_string()).collect(),
+            output: outputs.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     fn add_int_attribute(node: &mut NodeProto, name: &str, value: i64) {
-        let mut attr = AttributeProto::new();
-        attr.set_name(name.to_string());
-        attr.set_i(value);
-        node.mut_attribute().push(attr);
+        let attr = AttributeProto {
+            name: name.to_string(),
+            i: value,
+            ..Default::default()
+        };
+        node.attribute.push(attr);
     }
 
     fn add_ints_attribute(node: &mut NodeProto, name: &str, values: Vec<i64>) {
-        let mut attr = AttributeProto::new();
-        attr.set_name(name.to_string());
-        attr.set_ints(values);
-        node.mut_attribute().push(attr);
+        let attr = AttributeProto {
+            name: name.to_string(),
+            ints: values,
+            ..Default::default()
+        };
+        node.attribute.push(attr);
     }
 
     #[test]
@@ -926,10 +936,12 @@ mod tests {
         let node = create_test_node("Reshape", vec!["data", "shape"], vec!["reshaped"]);
 
         // Create a mock shape initializer [1, 2, 3, 4]
-        let mut shape_tensor = onnx::onnx::TensorProto::new();
-        shape_tensor.set_name("shape".to_string());
-        shape_tensor.set_data_type(onnx::onnx::TensorProto_DataType::INT64);
-        shape_tensor.set_int64_data(vec![1, 2, 3, 4]);
+        let shape_tensor = crate::protos::onnx::TensorProto {
+            name: "shape".to_string(),
+            data_type: crate::protos::onnx::TensorProto_DataType::Int64.into(),
+            int64_data: vec![1, 2, 3, 4],
+            ..Default::default()
+        };
 
         let mut initializers = std::collections::HashMap::new();
         initializers.insert("shape".to_string(), &shape_tensor);
@@ -1101,13 +1113,16 @@ mod tests {
         let node = create_test_node("Tile", vec!["input", "repeats"], vec!["output"]);
 
         // Create a mock repeats tensor [2, 3]
-        let mut repeats_tensor = onnx::onnx::TensorProto::new();
-        repeats_tensor.set_name("repeats".to_string());
-        repeats_tensor.set_data_type(onnx::onnx::TensorProto_DataType::INT64);
-        repeats_tensor.set_dims(vec![2]);
-        repeats_tensor.set_int64_data(vec![2, 3]);
+        let repeats_tensor = crate::protos::onnx::TensorProto {
+            name: "repeats".to_string(),
+            data_type: crate::protos::onnx::TensorProto_DataType::Int64.into(),
+            dims: vec![2],
+            int64_data: vec![2, 3],
+            ..Default::default()
+        };
 
-        let leaked_repeats: &'static onnx::onnx::TensorProto = Box::leak(Box::new(repeats_tensor));
+        let leaked_repeats: &'static crate::protos::onnx::TensorProto =
+            Box::leak(Box::new(repeats_tensor));
 
         let mut initializers = std::collections::HashMap::new();
         initializers.insert("repeats".to_string(), leaked_repeats);

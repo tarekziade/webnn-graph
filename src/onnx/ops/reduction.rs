@@ -3,7 +3,7 @@
 use crate::ast::Node;
 use crate::onnx::convert::{sanitize_identifier, OnnxError};
 use crate::onnx::ops::{ConversionContext, ConversionResult, OpHandler};
-use onnx::onnx::NodeProto;
+use crate::protos::onnx::NodeProto;
 use serde_json::Map;
 
 pub struct ReductionHandler;
@@ -21,9 +21,9 @@ impl OpHandler for ReductionHandler {
         node: &NodeProto,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let op_type = node.get_op_type();
-        let node_name = if node.has_name() {
-            node.get_name().to_string()
+        let op_type = node.op_type.as_str();
+        let node_name = if !node.name.is_empty() {
+            node.name.as_str().to_string()
         } else {
             "unnamed".to_string()
         };
@@ -50,7 +50,7 @@ impl ReductionHandler {
         webnn_op: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.is_empty() {
             return Err(OnnxError::InvalidShape(format!(
                 "{} expects at least 1 input",
@@ -62,24 +62,24 @@ impl ReductionHandler {
         let mut axes: Option<Vec<i64>> = None;
         let mut keepdims = 1i64; // ONNX default is 1 (keep dimensions)
 
-        for attr in node.get_attribute() {
-            match attr.get_name() {
+        for attr in node.attribute.as_slice() {
+            match attr.name.as_str() {
                 "axes" => {
-                    axes = Some(attr.get_ints().to_vec());
+                    axes = Some(attr.ints.clone());
                 }
                 "keepdims" => {
-                    if attr.has_i() {
-                        keepdims = attr.get_i();
+                    if attr.i != 0 {
+                        keepdims = attr.i;
                     }
                 }
                 _ => {}
             }
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0 = context.resolve_input(&inputs[0]);
@@ -105,7 +105,7 @@ impl ReductionHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -118,33 +118,34 @@ impl ReductionHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use onnx::onnx::{AttributeProto, NodeProto};
+    use crate::protos::onnx::{AttributeProto, NodeProto};
 
     fn create_test_node(op_type: &str, inputs: Vec<&str>, outputs: Vec<&str>) -> NodeProto {
-        let mut node = NodeProto::new();
-        node.set_op_type(op_type.to_string());
-        node.set_name(format!("test_{}", op_type.to_lowercase()));
-        node.set_input(protobuf::RepeatedField::from_vec(
-            inputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            outputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node
+        NodeProto {
+            op_type: op_type.to_string(),
+            name: format!("test_{}", op_type.to_lowercase()),
+            input: inputs.iter().map(|s| s.to_string()).collect(),
+            output: outputs.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     fn add_int_attribute(node: &mut NodeProto, name: &str, value: i64) {
-        let mut attr = AttributeProto::new();
-        attr.set_name(name.to_string());
-        attr.set_i(value);
-        node.mut_attribute().push(attr);
+        let attr = AttributeProto {
+            name: name.to_string(),
+            i: value,
+            ..Default::default()
+        };
+        node.attribute.push(attr);
     }
 
     fn add_ints_attribute(node: &mut NodeProto, name: &str, values: Vec<i64>) {
-        let mut attr = AttributeProto::new();
-        attr.set_name(name.to_string());
-        attr.set_ints(values);
-        node.mut_attribute().push(attr);
+        let attr = AttributeProto {
+            name: name.to_string(),
+            ints: values,
+            ..Default::default()
+        };
+        node.attribute.push(attr);
     }
 
     #[test]

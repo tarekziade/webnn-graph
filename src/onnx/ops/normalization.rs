@@ -3,7 +3,7 @@
 use crate::ast::Node;
 use crate::onnx::convert::{sanitize_identifier, OnnxError};
 use crate::onnx::ops::{ConversionContext, ConversionResult, OpHandler};
-use onnx::onnx::NodeProto;
+use crate::protos::onnx::NodeProto;
 use serde_json::Map;
 
 pub struct NormalizationHandler;
@@ -18,9 +18,9 @@ impl OpHandler for NormalizationHandler {
         node: &NodeProto,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let op_type = node.get_op_type();
-        let node_name = if node.has_name() {
-            node.get_name().to_string()
+        let op_type = node.op_type.as_str();
+        let node_name = if !node.name.is_empty() {
+            node.name.as_str().to_string()
         } else {
             "unnamed".to_string()
         };
@@ -44,7 +44,7 @@ impl NormalizationHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.is_empty() {
             return Err(OnnxError::InvalidShape(
                 "LayerNormalization expects at least 1 input".to_string(),
@@ -55,26 +55,26 @@ impl NormalizationHandler {
         let mut epsilon = 1e-5f32;
         let mut axis = -1i64;
 
-        for attr in node.get_attribute() {
-            match attr.get_name() {
+        for attr in node.attribute.as_slice() {
+            match attr.name.as_str() {
                 "epsilon" => {
-                    if attr.has_f() {
-                        epsilon = attr.get_f();
+                    if attr.f != 0.0 {
+                        epsilon = attr.f;
                     }
                 }
                 "axis" => {
-                    if attr.has_i() {
-                        axis = attr.get_i();
+                    if attr.i != 0 {
+                        axis = attr.i;
                     }
                 }
                 _ => {}
             }
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let mut options = Map::new();
@@ -112,7 +112,7 @@ impl NormalizationHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -128,7 +128,7 @@ impl NormalizationHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() != 1 {
             return Err(OnnxError::InvalidShape(format!(
                 "Softmax expects 1 input, got {}",
@@ -138,16 +138,16 @@ impl NormalizationHandler {
 
         // Extract axis attribute
         let mut axis = -1i64;
-        for attr in node.get_attribute() {
-            if attr.get_name() == "axis" && attr.has_i() {
-                axis = attr.get_i();
+        for attr in node.attribute.as_slice() {
+            if attr.name.as_str() == "axis" && attr.i != 0 {
+                axis = attr.i;
             }
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0 = context.resolve_input(&inputs[0]);
@@ -164,7 +164,7 @@ impl NormalizationHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -177,26 +177,25 @@ impl NormalizationHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use onnx::onnx::{AttributeProto, NodeProto};
+    use crate::protos::onnx::{AttributeProto, NodeProto};
 
     fn create_test_node(op_type: &str, inputs: Vec<&str>, outputs: Vec<&str>) -> NodeProto {
-        let mut node = NodeProto::new();
-        node.set_op_type(op_type.to_string());
-        node.set_name(format!("test_{}", op_type.to_lowercase()));
-        node.set_input(protobuf::RepeatedField::from_vec(
-            inputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            outputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node
+        NodeProto {
+            op_type: op_type.to_string(),
+            name: format!("test_{}", op_type.to_lowercase()),
+            input: inputs.iter().map(|s| s.to_string()).collect(),
+            output: outputs.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     fn add_int_attribute(node: &mut NodeProto, name: &str, value: i64) {
-        let mut attr = AttributeProto::new();
-        attr.set_name(name.to_string());
-        attr.set_i(value);
-        node.mut_attribute().push(attr);
+        let attr = AttributeProto {
+            name: name.to_string(),
+            i: value,
+            ..Default::default()
+        };
+        node.attribute.push(attr);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use crate::ast::{ConstDecl, Node};
 use crate::onnx::convert::OnnxError;
-use onnx::onnx::{NodeProto, TensorProto};
+use crate::protos::onnx::{NodeProto, TensorProto};
 use std::collections::HashMap;
 
 pub mod activation;
@@ -124,7 +124,7 @@ impl OpRegistry {
         node: &NodeProto,
         context: &ConversionContext<'a>,
     ) -> Result<ConversionResult, OnnxError> {
-        let op_type = node.get_op_type();
+        let op_type = node.op_type.as_str();
 
         for handler in &self.handlers {
             if handler.supports(op_type) {
@@ -133,8 +133,8 @@ impl OpRegistry {
         }
 
         // No handler found
-        let node_name = if node.has_name() {
-            node.get_name().to_string()
+        let node_name = if !node.name.is_empty() {
+            node.name.as_str().to_string()
         } else {
             "<unnamed>".to_string()
         };

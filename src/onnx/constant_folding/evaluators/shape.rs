@@ -5,7 +5,7 @@ use crate::onnx::constant_folding::{
     ConstantEvaluator as EvaluatorTrait, ConstantFoldingContext, ConstantTensor, TensorData,
 };
 use crate::onnx::convert::OnnxError;
-use onnx::onnx::{NodeProto, TensorProto_DataType};
+use crate::protos::onnx::{NodeProto, TensorProto_DataType};
 
 pub struct ShapeEvaluator;
 
@@ -15,13 +15,13 @@ impl EvaluatorTrait for ShapeEvaluator {
     }
 
     fn can_evaluate(&self, node: &NodeProto, ctx: &ConstantFoldingContext) -> bool {
-        if node.get_op_type() != "Shape" {
+        if node.op_type.as_str() != "Shape" {
             return false;
         }
 
         // Shape operation requires that we know the input's shape
         // The input doesn't need to be a constant, but we need its shape metadata
-        if let Some(input_name) = node.get_input().first() {
+        if let Some(input_name) = node.input.as_slice().first() {
             // Check if we have this as a constant (which includes shape info)
             if ctx.is_constant(input_name.as_str()) {
                 return true;
@@ -36,13 +36,14 @@ impl EvaluatorTrait for ShapeEvaluator {
         node: &NodeProto,
         ctx: &ConstantFoldingContext,
     ) -> Result<Vec<ConstantTensor>, OnnxError> {
-        let input_name = node
-            .get_input()
-            .first()
-            .ok_or_else(|| OnnxError::MissingAttribute {
-                attr: "input".to_string(),
-                op: "Shape".to_string(),
-            })?;
+        let input_name =
+            node.input
+                .as_slice()
+                .first()
+                .ok_or_else(|| OnnxError::MissingAttribute {
+                    attr: "input".to_string(),
+                    op: "Shape".to_string(),
+                })?;
 
         let input_tensor = ctx.get_constant(input_name.as_str()).ok_or_else(|| {
             OnnxError::ShapeInference(format!(
@@ -58,7 +59,7 @@ impl EvaluatorTrait for ShapeEvaluator {
         let output = ConstantTensor {
             data: TensorData::Int64(shape_values.clone()),
             shape: vec![shape_values.len() as i64],
-            data_type: TensorProto_DataType::INT64,
+            data_type: TensorProto_DataType::Int64.into(),
         };
 
         Ok(vec![output])
@@ -68,17 +69,19 @@ impl EvaluatorTrait for ShapeEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use onnx::onnx::TensorProto;
+    use crate::protos::onnx::TensorProto;
     use std::collections::HashMap;
 
     #[test]
     fn test_shape_evaluator() {
         // Create a test tensor with shape [2, 3, 4]
-        let mut tensor = TensorProto::new();
-        tensor.set_name("test_input".to_string());
-        tensor.set_data_type(TensorProto_DataType::FLOAT);
-        tensor.set_dims(vec![2, 3, 4]);
-        tensor.set_raw_data(vec![0u8; 4 * 2 * 3 * 4]); // 24 floats
+        let tensor = TensorProto {
+            name: "test_input".to_string(),
+            data_type: TensorProto_DataType::Float.into(),
+            dims: vec![2, 3, 4],
+            raw_data: vec![0u8; 4 * 2 * 3 * 4], // 24 floats
+            ..Default::default()
+        };
 
         // We need to leak the tensor to get a 'static reference for the test
         // In production code, the model owns the tensors
@@ -91,14 +94,12 @@ mod tests {
         let evaluator = ShapeEvaluator;
 
         // Create a Shape node
-        let mut node = NodeProto::new();
-        node.set_op_type("Shape".to_string());
-        node.set_input(protobuf::RepeatedField::from_vec(vec![
-            "test_input".to_string()
-        ]));
-        node.set_output(protobuf::RepeatedField::from_vec(vec![
-            "test_output".to_string()
-        ]));
+        let node = NodeProto {
+            op_type: "Shape".to_string(),
+            input: vec!["test_input".to_string()],
+            output: vec!["test_output".to_string()],
+            ..Default::default()
+        };
 
         // Check can_evaluate
         assert!(evaluator.can_evaluate(&node, &ctx));
@@ -109,7 +110,7 @@ mod tests {
 
         let output = &result[0];
         assert_eq!(output.shape, vec![3]); // Output is 1D with 3 elements
-        assert_eq!(output.data_type, TensorProto_DataType::INT64);
+        assert_eq!(output.data_type, TensorProto_DataType::Int64 as i32);
 
         if let TensorData::Int64(ref values) = output.data {
             assert_eq!(values, &vec![2, 3, 4]);

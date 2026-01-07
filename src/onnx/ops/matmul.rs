@@ -3,7 +3,7 @@
 use crate::ast::{ConstDecl, ConstInit, DataType, Node};
 use crate::onnx::convert::{sanitize_identifier, OnnxError};
 use crate::onnx::ops::{ConversionContext, ConversionResult, OpHandler};
-use onnx::onnx::NodeProto;
+use crate::protos::onnx::NodeProto;
 use serde_json::Map;
 
 pub struct MatMulHandler;
@@ -18,9 +18,9 @@ impl OpHandler for MatMulHandler {
         node: &NodeProto,
         _context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let op_type = node.get_op_type();
-        let node_name = if node.has_name() {
-            node.get_name().to_string()
+        let op_type = node.op_type.as_str();
+        let node_name = if !node.name.is_empty() {
+            node.name.as_str().to_string()
         } else {
             "unnamed".to_string()
         };
@@ -45,7 +45,7 @@ impl MatMulHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() != 2 {
             return Err(OnnxError::InvalidShape(format!(
                 "MatMul expects 2 inputs, got {}",
@@ -53,10 +53,10 @@ impl MatMulHandler {
             )));
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0 = context.resolve_input(&inputs[0]);
@@ -70,7 +70,7 @@ impl MatMulHandler {
             outputs: None,
         }]);
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -88,7 +88,7 @@ impl MatMulHandler {
         node_name: &str,
         context: &ConversionContext,
     ) -> Result<ConversionResult, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() < 2 {
             return Err(OnnxError::InvalidShape(format!(
                 "Gemm expects at least 2 inputs, got {}",
@@ -102,36 +102,36 @@ impl MatMulHandler {
         let mut trans_a = false;
         let mut trans_b = false;
 
-        for attr in node.get_attribute() {
-            match attr.get_name() {
+        for attr in node.attribute.as_slice() {
+            match attr.name.as_str() {
                 "alpha" => {
-                    if attr.has_f() {
-                        alpha = attr.get_f();
+                    if attr.f != 0.0 {
+                        alpha = attr.f;
                     }
                 }
                 "beta" => {
-                    if attr.has_f() {
-                        beta = attr.get_f();
+                    if attr.f != 0.0 {
+                        beta = attr.f;
                     }
                 }
                 "transA" => {
-                    if attr.has_i() {
-                        trans_a = attr.get_i() != 0;
+                    if attr.i != 0 {
+                        trans_a = attr.i != 0;
                     }
                 }
                 "transB" => {
-                    if attr.has_i() {
-                        trans_b = attr.get_i() != 0;
+                    if attr.i != 0 {
+                        trans_b = attr.i != 0;
                     }
                 }
                 _ => {}
             }
         }
 
-        let output_name = if node.get_output().is_empty() {
+        let output_name = if node.output.as_slice().is_empty() {
             format!("{}_output", node_name)
         } else {
-            sanitize_identifier(&node.get_output()[0].to_string())
+            sanitize_identifier(&node.output.as_slice()[0].to_string())
         };
 
         let input0_raw = inputs[0].to_string();
@@ -297,7 +297,7 @@ impl MatMulHandler {
             output_types: std::collections::HashMap::new(),
         };
 
-        if let Some(output) = node.get_output().first() {
+        if let Some(output) = node.output.as_slice().first() {
             result
                 .output_mappings
                 .insert(output.to_string(), output_name.clone());
@@ -310,19 +310,16 @@ impl MatMulHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use onnx::onnx::NodeProto;
+    use crate::protos::onnx::NodeProto;
 
     fn create_test_node(op_type: &str, inputs: Vec<&str>, outputs: Vec<&str>) -> NodeProto {
-        let mut node = NodeProto::new();
-        node.set_op_type(op_type.to_string());
-        node.set_name(format!("test_{}", op_type.to_lowercase()));
-        node.set_input(protobuf::RepeatedField::from_vec(
-            inputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            outputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node
+        NodeProto {
+            op_type: op_type.to_string(),
+            name: format!("test_{}", op_type.to_lowercase()),
+            input: inputs.iter().map(|s| s.to_string()).collect(),
+            output: outputs.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     #[test]

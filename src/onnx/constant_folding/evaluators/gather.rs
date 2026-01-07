@@ -5,7 +5,7 @@ use crate::onnx::constant_folding::{
     ConstantEvaluator as EvaluatorTrait, ConstantFoldingContext, ConstantTensor, TensorData,
 };
 use crate::onnx::convert::OnnxError;
-use onnx::onnx::NodeProto;
+use crate::protos::onnx::NodeProto;
 
 pub struct GatherEvaluator;
 
@@ -177,12 +177,12 @@ impl EvaluatorTrait for GatherEvaluator {
     }
 
     fn can_evaluate(&self, node: &NodeProto, ctx: &ConstantFoldingContext) -> bool {
-        if node.get_op_type() != "Gather" {
+        if node.op_type.as_str() != "Gather" {
             return false;
         }
 
         // Need both data and indices to be constants
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() < 2 {
             return false;
         }
@@ -195,7 +195,7 @@ impl EvaluatorTrait for GatherEvaluator {
         node: &NodeProto,
         ctx: &ConstantFoldingContext,
     ) -> Result<Vec<ConstantTensor>, OnnxError> {
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() < 2 {
             return Err(OnnxError::MissingAttribute {
                 attr: "inputs".to_string(),
@@ -213,10 +213,11 @@ impl EvaluatorTrait for GatherEvaluator {
 
         // Get axis attribute (default 0)
         let axis = node
-            .get_attribute()
+            .attribute
+            .as_slice()
             .iter()
-            .find(|a| a.get_name() == "axis" && a.has_i())
-            .map(|a| a.get_i())
+            .find(|a| a.name.as_str() == "axis")
+            .map(|a| a.i)
             .unwrap_or(0);
 
         // Convert indices to int64
@@ -229,7 +230,7 @@ impl EvaluatorTrait for GatherEvaluator {
         let output = ConstantTensor {
             data: output_data.clone(),
             shape: output_shape,
-            data_type: output_data.data_type(),
+            data_type: output_data.data_type().into(),
         };
 
         Ok(vec![output])
@@ -239,7 +240,7 @@ impl EvaluatorTrait for GatherEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use onnx::onnx::{NodeProto, TensorProto, TensorProto_DataType};
+    use crate::protos::onnx::{NodeProto, TensorProto, TensorProto_DataType};
     use std::collections::HashMap;
 
     #[test]
@@ -248,20 +249,24 @@ mod tests {
         // This is the common pattern: Shape → Gather
 
         // Create context with a shape tensor [2, 128, 384]
-        let mut shape_tensor = TensorProto::new();
-        shape_tensor.set_name("shape".to_string());
-        shape_tensor.set_data_type(TensorProto_DataType::INT64);
-        shape_tensor.set_dims(vec![3]);
-        shape_tensor.set_int64_data(vec![2, 128, 384]);
+        let shape_tensor = TensorProto {
+            name: "shape".to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![3],
+            int64_data: vec![2, 128, 384],
+            ..Default::default()
+        };
 
         let shape_tensor_static: &'static TensorProto = Box::leak(Box::new(shape_tensor));
 
         // Create indices tensor [0, 1]  (gather first two dimensions)
-        let mut indices_tensor = TensorProto::new();
-        indices_tensor.set_name("indices".to_string());
-        indices_tensor.set_data_type(TensorProto_DataType::INT64);
-        indices_tensor.set_dims(vec![2]);
-        indices_tensor.set_int64_data(vec![0, 1]);
+        let indices_tensor = TensorProto {
+            name: "indices".to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![2],
+            int64_data: vec![0, 1],
+            ..Default::default()
+        };
 
         let indices_tensor_static: &'static TensorProto = Box::leak(Box::new(indices_tensor));
 
@@ -273,15 +278,12 @@ mod tests {
         let evaluator = GatherEvaluator;
 
         // Create Gather node
-        let mut node = NodeProto::new();
-        node.set_op_type("Gather".to_string());
-        node.set_input(protobuf::RepeatedField::from_vec(vec![
-            "shape".to_string(),
-            "indices".to_string(),
-        ]));
-        node.set_output(protobuf::RepeatedField::from_vec(vec![
-            "gathered".to_string()
-        ]));
+        let node = NodeProto {
+            op_type: "Gather".to_string(),
+            input: vec!["shape".to_string(), "indices".to_string()],
+            output: vec!["gathered".to_string()],
+            ..Default::default()
+        };
 
         // Evaluate
         assert!(evaluator.can_evaluate(&node, &ctx));
@@ -303,19 +305,23 @@ mod tests {
     fn test_gather_scalar_index() {
         // Test gathering a single element (scalar result)
 
-        let mut data_tensor = TensorProto::new();
-        data_tensor.set_name("data".to_string());
-        data_tensor.set_data_type(TensorProto_DataType::INT64);
-        data_tensor.set_dims(vec![4]);
-        data_tensor.set_int64_data(vec![10, 20, 30, 40]);
+        let data_tensor = TensorProto {
+            name: "data".to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![4],
+            int64_data: vec![10, 20, 30, 40],
+            ..Default::default()
+        };
 
         let data_tensor_static: &'static TensorProto = Box::leak(Box::new(data_tensor));
 
-        let mut index_tensor = TensorProto::new();
-        index_tensor.set_name("index".to_string());
-        index_tensor.set_data_type(TensorProto_DataType::INT64);
-        index_tensor.set_dims(vec![]); // Scalar
-        index_tensor.set_int64_data(vec![2]); // Get index 2 (value 30)
+        let index_tensor = TensorProto {
+            name: "index".to_string(),
+            data_type: TensorProto_DataType::Int64.into(),
+            dims: vec![],        // Scalar
+            int64_data: vec![2], // Get index 2 (value 30)
+            ..Default::default()
+        };
 
         let index_tensor_static: &'static TensorProto = Box::leak(Box::new(index_tensor));
 
@@ -326,15 +332,12 @@ mod tests {
         let ctx = ConstantFoldingContext::new(&init_map).unwrap();
         let evaluator = GatherEvaluator;
 
-        let mut node = NodeProto::new();
-        node.set_op_type("Gather".to_string());
-        node.set_input(protobuf::RepeatedField::from_vec(vec![
-            "data".to_string(),
-            "index".to_string(),
-        ]));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            vec!["result".to_string()],
-        ));
+        let node = NodeProto {
+            op_type: "Gather".to_string(),
+            input: vec!["data".to_string(), "index".to_string()],
+            output: vec!["result".to_string()],
+            ..Default::default()
+        };
 
         let result = evaluator.evaluate(&node, &ctx).unwrap();
         let output = &result[0];

@@ -1,19 +1,19 @@
 use crate::ast::Node;
 use crate::onnx::convert::OnnxError;
 use crate::onnx::ops::{ConversionContext, ConversionResult, OpHandler};
-use onnx::onnx::NodeProto;
+use crate::protos::onnx::NodeProto;
 use serde_json::Map;
 
 pub struct ScatterHandler;
 
 impl ScatterHandler {
     fn get_string_attr(node: &NodeProto, name: &str) -> Option<String> {
-        for a in node.get_attribute() {
-            if a.get_name() != name {
+        for a in node.attribute.as_slice() {
+            if a.name.as_str() != name {
                 continue;
             }
-            // AttributeProto::STRING is stored as bytes in protobuf; Rust getter returns Vec<u8>
-            let raw = a.get_s().to_vec();
+            // AttributeProto::STRING is stored as bytes in protobuf; Proto3 field is Vec<u8>
+            let raw = a.s.clone();
             if raw.is_empty() {
                 return None;
             }
@@ -41,8 +41,8 @@ impl OpHandler for ScatterHandler {
         let reduction =
             Self::get_string_attr(node, "reduction").unwrap_or_else(|| "none".to_string());
         if reduction != "none" {
-            let node_name = if node.has_name() {
-                node.get_name().to_string()
+            let node_name = if !node.name.is_empty() {
+                node.name.as_str().to_string()
             } else {
                 "".to_string()
             };
@@ -52,7 +52,7 @@ impl OpHandler for ScatterHandler {
             });
         }
 
-        let inputs = node.get_input();
+        let inputs = node.input.as_slice();
         if inputs.len() != 3 {
             return Err(OnnxError::InvalidShape(format!(
                 "ScatterND expects 3 inputs (data, indices, updates), got {}",
@@ -64,7 +64,7 @@ impl OpHandler for ScatterHandler {
         let indices_id = context.resolve_input(&inputs[1]);
         let updates_id = context.resolve_input(&inputs[2]);
 
-        let outputs = node.get_output();
+        let outputs = node.output.as_slice();
         if outputs.len() != 1 {
             return Err(OnnxError::InvalidShape(format!(
                 "ScatterND expects 1 output, got {}",
@@ -101,27 +101,26 @@ impl OpHandler for ScatterHandler {
 mod tests {
     use super::*;
     use crate::ast::DataType;
-    use onnx::onnx::{AttributeProto, NodeProto, TensorProto};
+    use crate::protos::onnx::{AttributeProto, NodeProto, TensorProto};
 
     fn create_test_node(op_type: &str, inputs: Vec<&str>, outputs: Vec<&str>) -> NodeProto {
-        let mut node = NodeProto::new();
-        node.set_op_type(op_type.to_string());
-        node.set_name(format!("test_{}", op_type.to_lowercase()));
-        node.set_input(protobuf::RepeatedField::from_vec(
-            inputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node.set_output(protobuf::RepeatedField::from_vec(
-            outputs.iter().map(|s| s.to_string()).collect(),
-        ));
-        node
+        NodeProto {
+            op_type: op_type.to_string(),
+            name: format!("test_{}", op_type.to_lowercase()),
+            input: inputs.iter().map(|s| s.to_string()).collect(),
+            output: outputs.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     fn add_string_attr(node: &mut NodeProto, name: &str, value: &str) {
-        let mut attr = AttributeProto::new();
-        attr.set_name(name.to_string());
         // Protobuf stores STRING attrs in the `s` bytes field.
-        attr.set_s(value.as_bytes().to_vec());
-        node.mut_attribute().push(attr);
+        let attr = AttributeProto {
+            name: name.to_string(),
+            s: value.as_bytes().to_vec(),
+            ..Default::default()
+        };
+        node.attribute.push(attr);
     }
 
     // Own the backing maps so the ConversionContext can safely borrow them.

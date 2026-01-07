@@ -4,7 +4,7 @@
 pub mod evaluators;
 
 use crate::onnx::convert::OnnxError;
-use onnx::onnx::{ModelProto, NodeProto, TensorProto, TensorProto_DataType};
+use crate::protos::onnx::{ModelProto, NodeProto, TensorProto, TensorProto_DataType};
 use std::collections::{HashMap, HashSet};
 
 /// Represents constant tensor data with various types
@@ -39,12 +39,12 @@ impl TensorData {
     /// Get the data type
     pub fn data_type(&self) -> TensorProto_DataType {
         match self {
-            TensorData::Int64(_) => TensorProto_DataType::INT64,
-            TensorData::Int32(_) => TensorProto_DataType::INT32,
-            TensorData::Float32(_) => TensorProto_DataType::FLOAT,
-            TensorData::Float64(_) => TensorProto_DataType::DOUBLE,
-            TensorData::UInt8(_) => TensorProto_DataType::UINT8,
-            TensorData::Int8(_) => TensorProto_DataType::INT8,
+            TensorData::Int64(_) => TensorProto_DataType::Int64,
+            TensorData::Int32(_) => TensorProto_DataType::Int32,
+            TensorData::Float32(_) => TensorProto_DataType::Float,
+            TensorData::Float64(_) => TensorProto_DataType::Double,
+            TensorData::UInt8(_) => TensorProto_DataType::Uint8,
+            TensorData::Int8(_) => TensorProto_DataType::Int8,
         }
     }
 
@@ -62,13 +62,13 @@ impl TensorData {
 
     /// Create from TensorProto
     pub fn from_tensor_proto(tensor: &TensorProto) -> Result<Self, OnnxError> {
-        let raw_data = tensor.get_raw_data();
-        let data_type = tensor.get_data_type();
+        let raw_data = tensor.raw_data.as_slice();
+        let data_type = tensor.data_type;
 
         if !raw_data.is_empty() {
             // Parse from raw bytes
             match data_type {
-                TensorProto_DataType::INT64 => {
+                x if x == TensorProto_DataType::Int64 as i32 => {
                     let values = raw_data
                         .chunks_exact(8)
                         .map(|c| {
@@ -77,21 +77,21 @@ impl TensorData {
                         .collect();
                     Ok(TensorData::Int64(values))
                 }
-                TensorProto_DataType::INT32 => {
+                x if x == TensorProto_DataType::Int32 as i32 => {
                     let values = raw_data
                         .chunks_exact(4)
                         .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                         .collect();
                     Ok(TensorData::Int32(values))
                 }
-                TensorProto_DataType::FLOAT => {
+                x if x == TensorProto_DataType::Float as i32 => {
                     let values = raw_data
                         .chunks_exact(4)
                         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                         .collect();
                     Ok(TensorData::Float32(values))
                 }
-                TensorProto_DataType::DOUBLE => {
+                x if x == TensorProto_DataType::Double as i32 => {
                     let values = raw_data
                         .chunks_exact(8)
                         .map(|c| {
@@ -100,31 +100,33 @@ impl TensorData {
                         .collect();
                     Ok(TensorData::Float64(values))
                 }
-                TensorProto_DataType::UINT8 => Ok(TensorData::UInt8(raw_data.to_vec())),
-                TensorProto_DataType::INT8 => Ok(TensorData::Int8(
+                x if x == TensorProto_DataType::Uint8 as i32 => {
+                    Ok(TensorData::UInt8(raw_data.to_vec()))
+                }
+                x if x == TensorProto_DataType::Int8 as i32 => Ok(TensorData::Int8(
                     raw_data.iter().map(|&x| x as i8).collect(),
                 )),
                 _ => Err(OnnxError::TypeConversion(
-                    crate::onnx::types::TypeConversionError::UnsupportedDataType(data_type as i32),
+                    crate::onnx::types::TypeConversionError::UnsupportedDataType(data_type),
                 )),
             }
         } else {
             // Parse from typed data fields
             match data_type {
-                TensorProto_DataType::INT64 => {
-                    Ok(TensorData::Int64(tensor.get_int64_data().to_vec()))
+                x if x == TensorProto_DataType::Int64 as i32 => {
+                    Ok(TensorData::Int64(tensor.int64_data.as_slice().to_vec()))
                 }
-                TensorProto_DataType::INT32 => {
-                    Ok(TensorData::Int32(tensor.get_int32_data().to_vec()))
+                x if x == TensorProto_DataType::Int32 as i32 => {
+                    Ok(TensorData::Int32(tensor.int32_data.as_slice().to_vec()))
                 }
-                TensorProto_DataType::FLOAT => {
-                    Ok(TensorData::Float32(tensor.get_float_data().to_vec()))
+                x if x == TensorProto_DataType::Float as i32 => {
+                    Ok(TensorData::Float32(tensor.float_data.as_slice().to_vec()))
                 }
-                TensorProto_DataType::DOUBLE => {
-                    Ok(TensorData::Float64(tensor.get_double_data().to_vec()))
+                x if x == TensorProto_DataType::Double as i32 => {
+                    Ok(TensorData::Float64(tensor.double_data.as_slice().to_vec()))
                 }
                 _ => Err(OnnxError::TypeConversion(
-                    crate::onnx::types::TypeConversionError::UnsupportedDataType(data_type as i32),
+                    crate::onnx::types::TypeConversionError::UnsupportedDataType(data_type),
                 )),
             }
         }
@@ -136,15 +138,15 @@ impl TensorData {
 pub struct ConstantTensor {
     pub data: TensorData,
     pub shape: Vec<i64>,
-    pub data_type: TensorProto_DataType,
+    pub data_type: i32,
 }
 
 impl ConstantTensor {
     /// Create a ConstantTensor from a TensorProto
     pub fn from_tensor_proto(tensor: &TensorProto) -> Result<Self, OnnxError> {
         let data = TensorData::from_tensor_proto(tensor)?;
-        let shape = tensor.get_dims().to_vec();
-        let data_type = tensor.get_data_type();
+        let shape = tensor.dims.as_slice().to_vec();
+        let data_type = tensor.data_type;
 
         Ok(ConstantTensor {
             data,
@@ -155,12 +157,13 @@ impl ConstantTensor {
 
     /// Convert to TensorProto
     pub fn to_tensor_proto(&self, name: &str) -> TensorProto {
-        let mut proto = TensorProto::new();
-        proto.set_name(name.to_string());
-        proto.set_data_type(self.data_type);
-        proto.set_dims(self.shape.clone());
-        proto.set_raw_data(self.data.to_bytes());
-        proto
+        TensorProto {
+            name: name.to_string(),
+            data_type: self.data_type,
+            dims: self.shape.clone(),
+            raw_data: self.data.to_bytes(),
+            ..Default::default()
+        }
     }
 
     /// Get the total number of elements
@@ -189,11 +192,11 @@ impl<'a> ConstantFoldingContext<'a> {
 
         for (name, tensor) in initializers.iter() {
             // Only add tensors with data
-            if !tensor.get_raw_data().is_empty()
-                || !tensor.get_int64_data().is_empty()
-                || !tensor.get_int32_data().is_empty()
-                || !tensor.get_float_data().is_empty()
-                || !tensor.get_double_data().is_empty()
+            if !tensor.raw_data.as_slice().is_empty()
+                || !tensor.int64_data.as_slice().is_empty()
+                || !tensor.int32_data.as_slice().is_empty()
+                || !tensor.float_data.as_slice().is_empty()
+                || !tensor.double_data.as_slice().is_empty()
             {
                 match ConstantTensor::from_tensor_proto(tensor) {
                     Ok(ct) => {
@@ -269,10 +272,10 @@ fn identify_constant_nodes(
     ctx: &ConstantFoldingContext,
     evaluators: &[Box<dyn ConstantEvaluator>],
 ) -> Result<Vec<usize>, OnnxError> {
-    let graph = model.get_graph();
+    let graph = model.graph.as_ref().unwrap();
     let mut constant_nodes = Vec::new();
 
-    for (idx, node) in graph.get_node().iter().enumerate() {
+    for (idx, node) in graph.node.as_slice().iter().enumerate() {
         // Check if any evaluator can handle this node
         let can_evaluate = evaluators.iter().any(|e| e.can_evaluate(node, ctx));
 
@@ -291,11 +294,11 @@ fn evaluate_constant_nodes(
     ctx: &mut ConstantFoldingContext,
     evaluators: &[Box<dyn ConstantEvaluator>],
 ) -> Result<FoldingResult, OnnxError> {
-    let graph = model.get_graph();
+    let graph = model.graph.as_ref().unwrap();
     let mut result = FoldingResult::default();
 
     for &idx in constant_node_indices {
-        let node = &graph.get_node()[idx];
+        let node = &graph.node.as_slice()[idx];
 
         // Find an evaluator that can handle this node
         let evaluator = evaluators.iter().find(|e| e.can_evaluate(node, ctx));
@@ -305,8 +308,8 @@ fn evaluate_constant_nodes(
                 Ok(output_tensors) => {
                     // Add outputs as new initializers
                     for (i, tensor) in output_tensors.iter().enumerate() {
-                        if i < node.get_output().len() {
-                            let output_name = &node.get_output()[i];
+                        if i < node.output.as_slice().len() {
+                            let output_name = &node.output.as_slice()[i];
                             let proto = tensor.to_tensor_proto(output_name);
                             result.new_initializers.push(proto.clone());
 
@@ -321,8 +324,8 @@ fn evaluate_constant_nodes(
                 Err(e) => {
                     eprintln!(
                         "Warning: Failed to evaluate constant node '{}' ({}): {}",
-                        node.get_name(),
-                        node.get_op_type(),
+                        node.name.as_str(),
+                        node.op_type.as_str(),
                         e
                     );
                 }
@@ -342,19 +345,22 @@ pub fn fold_constants_in_model(
     let max_iterations = 10;
 
     // Build initializers map
-    let graph = model.get_graph();
+    let graph = model.graph.as_ref().unwrap();
     let mut initializers_map: HashMap<String, &TensorProto> = HashMap::new();
-    for init in graph.get_initializer() {
-        initializers_map.insert(init.get_name().to_string(), init);
+    for init in graph.initializer.as_slice() {
+        initializers_map.insert(init.name.as_str().to_string(), init);
     }
 
     for iteration in 0..max_iterations {
         // 1. Build context from current initializers
         let initializers_map_ref: HashMap<String, &TensorProto> = model
-            .get_graph()
-            .get_initializer()
+            .graph
+            .as_ref()
+            .unwrap()
+            .initializer
+            .as_slice()
             .iter()
-            .map(|init| (init.get_name().to_string(), init))
+            .map(|init| (init.name.as_str().to_string(), init))
             .collect();
 
         let mut ctx = build_context(model, &initializers_map_ref)?;
@@ -374,17 +380,17 @@ pub fn fold_constants_in_model(
         }
 
         // 4. Add new initializers to the model
-        let graph_mut = model.mut_graph();
+        let graph_mut = model.graph.as_mut().unwrap();
         for init in result.new_initializers {
-            graph_mut.mut_initializer().push(init);
+            graph_mut.initializer.push(init);
         }
 
         // 5. Remove evaluated nodes
-        let nodes = graph_mut.get_node().to_vec();
-        graph_mut.clear_node();
+        let nodes = graph_mut.node.as_slice().to_vec();
+        graph_mut.node.clear();
         for (idx, node) in nodes.into_iter().enumerate() {
             if !result.nodes_to_remove.contains(&idx) {
-                graph_mut.mut_node().push(node);
+                graph_mut.node.push(node);
             }
         }
 
@@ -429,14 +435,14 @@ mod tests {
         let ct = ConstantTensor {
             data: TensorData::Int64(vec![1, 2, 3, 4, 5, 6]),
             shape: vec![2, 3],
-            data_type: TensorProto_DataType::INT64,
+            data_type: TensorProto_DataType::Int64 as i32,
         };
         assert_eq!(ct.numel(), 6);
 
         let ct = ConstantTensor {
             data: TensorData::Int64(vec![42]),
             shape: vec![],
-            data_type: TensorProto_DataType::INT64,
+            data_type: TensorProto_DataType::Int64 as i32,
         };
         assert_eq!(ct.numel(), 1);
     }

@@ -5,7 +5,10 @@
 use crate::ast::DataType;
 use crate::onnx::ir::{Dim, OnnxIrGraph, TensorShape, TensorType};
 use crate::onnx::types::map_onnx_data_type;
-use onnx::onnx::{GraphProto, ModelProto, NodeProto, TensorProto, TensorProto_DataType};
+use crate::protos::onnx::{
+    tensor_shape_proto::dimension::Value as DimensionValue, type_proto::Value as TypeProtoValue,
+    GraphProto, ModelProto, NodeProto, TensorProto, TensorProto_DataType,
+};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
@@ -36,16 +39,17 @@ pub fn infer_static_shapes(
 ) -> Result<InferenceResult, ShapeInferenceError> {
     let mut result = InferenceResult::default();
 
-    if !model.has_graph() {
+    if model.graph.is_none() {
         return Ok(result);
     }
 
-    let graph = model.get_graph();
+    let graph = model.graph.as_ref().unwrap();
     let mut ir = OnnxIrGraph::default();
     let initializer_names: HashSet<String> = graph
-        .get_initializer()
+        .initializer
+        .as_slice()
         .iter()
-        .map(|i| i.get_name().to_string())
+        .map(|i| i.name.as_str().to_string())
         .collect();
 
     seed_inputs(graph, overrides, &initializer_names, &mut ir, &mut result)?;
@@ -64,8 +68,8 @@ fn seed_inputs(
     ir: &mut OnnxIrGraph,
     result: &mut InferenceResult,
 ) -> Result<(), ShapeInferenceError> {
-    for input in graph.get_input() {
-        let name = input.get_name().to_string();
+    for input in graph.input.as_slice() {
+        let name = input.name.as_str().to_string();
         let vi = ir.value_or_insert(&name);
         vi.producer = None;
 
@@ -73,39 +77,48 @@ fn seed_inputs(
             continue;
         }
 
-        if !input.has_field_type() || !input.get_field_type().has_tensor_type() {
-            return Err(ShapeInferenceError::MissingInputShape(name));
-        }
+        let type_proto = input
+            .r#type
+            .as_ref()
+            .ok_or_else(|| ShapeInferenceError::MissingInputShape(name.clone()))?;
 
-        let tensor_type = input.get_field_type().get_tensor_type();
-        let dtype = if tensor_type.has_elem_type() {
-            map_onnx_data_type(tensor_type.get_elem_type() as i32).map_err(|_| {
-                ShapeInferenceError::UnsupportedDataType(tensor_type.get_elem_type() as i32)
-            })?
+        let tensor_type = match &type_proto.value {
+            Some(TypeProtoValue::TensorType(tt)) => tt,
+            _ => return Err(ShapeInferenceError::MissingInputShape(name.clone())),
+        };
+
+        let dtype = if tensor_type.elem_type != 0 {
+            map_onnx_data_type(tensor_type.elem_type)
+                .map_err(|_| ShapeInferenceError::UnsupportedDataType(tensor_type.elem_type))?
         } else {
             return Err(ShapeInferenceError::UnsupportedDataType(0));
         };
 
-        if !tensor_type.has_shape() {
-            return Err(ShapeInferenceError::MissingInputShape(name));
-        }
+        let shape = tensor_type
+            .shape
+            .as_ref()
+            .ok_or_else(|| ShapeInferenceError::MissingInputShape(name.clone()))?;
 
         let mut dims = Vec::new();
-        for dim in tensor_type.get_shape().get_dim() {
-            if dim.has_dim_value() {
-                dims.push(Dim::Known(dim.get_dim_value()));
-            } else if dim.has_dim_param() {
-                let key = dim.get_dim_param().to_string();
-                if let Some(v) = overrides.get(&key) {
-                    dims.push(Dim::Known(*v as i64));
-                } else {
-                    return Err(ShapeInferenceError::DynamicDim {
-                        input: name.clone(),
-                        dim: key,
-                    });
+        for dim in shape.dim.as_slice() {
+            if let Some(value) = &dim.value {
+                match value {
+                    DimensionValue::DimValue(v) => {
+                        dims.push(Dim::Known(*v));
+                    }
+                    DimensionValue::DimParam(key) => {
+                        if let Some(v) = overrides.get(key.as_str()) {
+                            dims.push(Dim::Known(*v as i64));
+                        } else {
+                            return Err(ShapeInferenceError::DynamicDim {
+                                input: name.clone(),
+                                dim: key.clone(),
+                            });
+                        }
+                    }
                 }
             } else {
-                return Err(ShapeInferenceError::MissingInputShape(name));
+                return Err(ShapeInferenceError::MissingInputShape(name.clone()));
             }
         }
 
@@ -127,14 +140,14 @@ fn seed_initializers(
     ir: &mut OnnxIrGraph,
     result: &mut InferenceResult,
 ) -> Result<(), ShapeInferenceError> {
-    for init in graph.get_initializer() {
-        let name = init.get_name().to_string();
+    for init in graph.initializer.as_slice() {
+        let name = init.name.as_str().to_string();
         let vi = ir.value_or_insert(&name);
         vi.producer = None;
 
-        let dtype = map_onnx_data_type(init.get_data_type() as i32)
-            .map_err(|_| ShapeInferenceError::UnsupportedDataType(init.get_data_type() as i32))?;
-        let shape: Vec<i64> = init.get_dims().to_vec();
+        let dtype = map_onnx_data_type(init.data_type)
+            .map_err(|_| ShapeInferenceError::UnsupportedDataType(init.data_type))?;
+        let shape: Vec<i64> = init.dims.as_slice().to_vec();
         result.value_types.insert(name.clone(), dtype.clone());
         result.value_shapes.insert(name.clone(), shape);
 
@@ -156,25 +169,25 @@ fn seed_constant_nodes(
     result: &mut InferenceResult,
     ir: &mut OnnxIrGraph,
 ) -> Result<(), ShapeInferenceError> {
-    for node in graph.get_node() {
-        if node.get_op_type() != "Constant" {
+    for node in graph.node.as_slice() {
+        if node.op_type.as_str() != "Constant" {
             continue;
         }
 
-        if let Some(out) = node.get_output().first() {
+        if let Some(out) = node.output.as_slice().first() {
             let out_name = out.to_string();
             let vi = ir.value_or_insert(&out_name);
-            vi.producer = Some(node.get_name().to_string());
+            vi.producer = Some(node.name.as_str().to_string());
 
             if let Some(attr) = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "value" && a.has_t())
+                .find(|a| a.name.as_str() == "value" && a.t.is_some())
             {
-                let t = attr.get_t();
-                let dtype = map_onnx_data_type(t.get_data_type() as i32).map_err(|_| {
-                    ShapeInferenceError::UnsupportedDataType(t.get_data_type() as i32)
-                })?;
+                let t = attr.t.as_ref().unwrap();
+                let dtype = map_onnx_data_type(t.data_type)
+                    .map_err(|_| ShapeInferenceError::UnsupportedDataType(t.data_type))?;
                 result.value_types.insert(out_name.clone(), dtype);
 
                 let vals = read_int_tensor(t);
@@ -209,8 +222,8 @@ fn propagate_node_shapes(
         progress = false;
         iter += 1;
 
-        for node in graph.get_node() {
-            let outputs = node.get_output();
+        for node in graph.node.as_slice() {
+            let outputs = node.output.as_slice();
             if outputs.is_empty() {
                 continue;
             }
@@ -226,7 +239,7 @@ fn propagate_node_shapes(
                 result.value_shapes.entry(out_name.clone()).or_insert(shape);
 
                 // Propagate dtype from first input if available.
-                if let Some(first_in) = node.get_input().first() {
+                if let Some(first_in) = node.input.as_slice().first() {
                     if let Some(dtype) = result.value_types.get(first_in).cloned() {
                         result.value_types.entry(out_name.clone()).or_insert(dtype);
                     }
@@ -272,30 +285,31 @@ fn broadcast_shapes(a: &[i64], b: &[i64]) -> Option<Vec<i64>> {
 }
 
 fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>> {
-    let op = node.get_op_type();
+    let op = node.op_type.as_str();
     match op {
         "Relu" | "Tanh" | "Sigmoid" | "Erf" | "Softmax" | "Gelu" | "Exp" | "Log" | "Abs"
         | "Neg" | "Sqrt" | "LayerNormalization" => node
-            .get_input()
+            .input
+            .as_slice()
             .first()
             .and_then(|i| ctx.value_shapes.get(i).cloned()),
         "Add" | "Sub" | "Mul" | "Div" | "Pow" => {
-            if node.get_input().len() < 2 {
+            if node.input.as_slice().len() < 2 {
                 return None;
             }
-            let a = node.get_input()[0].as_str();
-            let b = node.get_input()[1].as_str();
+            let a = node.input.as_slice()[0].as_str();
+            let b = node.input.as_slice()[1].as_str();
             match (ctx.value_shapes.get(a), ctx.value_shapes.get(b)) {
                 (Some(sa), Some(sb)) => broadcast_shapes(sa, sb),
                 _ => None,
             }
         }
         "MatMul" => {
-            if node.get_input().len() < 2 {
+            if node.input.as_slice().len() < 2 {
                 return None;
             }
-            let a_shape = ctx.value_shapes.get(node.get_input()[0].as_str())?;
-            let b_shape = ctx.value_shapes.get(node.get_input()[1].as_str())?;
+            let a_shape = ctx.value_shapes.get(node.input.as_slice()[0].as_str())?;
+            let b_shape = ctx.value_shapes.get(node.input.as_slice()[1].as_str())?;
 
             // Attention pattern: rank-4 [B,S,H,D] x [B,S,H,D] -> [B,S,H,H]
             if a_shape.len() == 4 && b_shape.len() == 4 {
@@ -317,13 +331,14 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
             None
         }
         "Transpose" => {
-            let input = node.get_input().first()?;
+            let input = node.input.as_slice().first()?;
             let shape = ctx.value_shapes.get(input)?;
             let perm: Vec<usize> = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "perm")
-                .map(|a| a.get_ints().iter().map(|&i| i as usize).collect())
+                .find(|a| a.name.as_str() == "perm")
+                .map(|a| a.ints.iter().map(|&i| i as usize).collect::<Vec<usize>>())
                 .unwrap_or_else(|| (0..shape.len()).rev().collect());
             if perm.iter().any(|&i| i >= shape.len()) {
                 return None;
@@ -332,7 +347,7 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
         }
         "Concat" => {
             let mut shapes = Vec::new();
-            for inp in node.get_input() {
+            for inp in node.input.as_slice() {
                 if let Some(s) = ctx.value_shapes.get(inp.as_str()) {
                     shapes.push(s.clone());
                 } else {
@@ -343,10 +358,11 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
                 return None;
             }
             let mut axis = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "axis" && a.has_i())
-                .map(|a| a.get_i())
+                .find(|a| a.name.as_str() == "axis" && a.i != 0)
+                .map(|a| a.i)
                 .unwrap_or(0);
             if axis < 0 {
                 axis += shapes[0].len() as i64;
@@ -362,15 +378,16 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
             Some(out)
         }
         "Unsqueeze" => {
-            if node.get_input().is_empty() {
+            if node.input.as_slice().is_empty() {
                 return None;
             }
-            let input_shape = ctx.value_shapes.get(node.get_input()[0].as_str())?;
+            let input_shape = ctx.value_shapes.get(node.input.as_slice()[0].as_str())?;
             let axes = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "axes")
-                .map(|a| a.get_ints().to_vec())
+                .find(|a| a.name.as_str() == "axes")
+                .map(|a| a.ints.clone())
                 .unwrap_or_default();
             if axes.is_empty() {
                 return None;
@@ -391,16 +408,27 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
             }
             Some(output_shape)
         }
-        "Squeeze" => {
-            if node.get_input().is_empty() {
+        "Expand" => {
+            if node.input.as_slice().len() < 2 {
                 return None;
             }
-            let input_shape = ctx.value_shapes.get(node.get_input()[0].as_str())?;
+            let target_shape = ctx.const_values.get(node.input.as_slice()[1].as_str())?;
+            if target_shape.is_empty() {
+                return None;
+            }
+            Some(target_shape.clone())
+        }
+        "Squeeze" => {
+            if node.input.as_slice().is_empty() {
+                return None;
+            }
+            let input_shape = ctx.value_shapes.get(node.input.as_slice()[0].as_str())?;
             let axes = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "axes")
-                .map(|a| a.get_ints().to_vec())
+                .find(|a| a.name.as_str() == "axes")
+                .map(|a| a.ints.clone())
                 .unwrap_or_default();
             let mut output_shape = input_shape.clone();
             if axes.is_empty() {
@@ -429,11 +457,11 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
             Some(keep)
         }
         "Reshape" => {
-            if node.get_input().len() < 2 {
+            if node.input.as_slice().len() < 2 {
                 return None;
             }
-            let data_shape = ctx.value_shapes.get(node.get_input()[0].as_str())?;
-            let shape_input = node.get_input()[1].as_str();
+            let data_shape = ctx.value_shapes.get(node.input.as_slice()[0].as_str())?;
+            let shape_input = node.input.as_slice()[1].as_str();
             let mut target: Vec<i64> = ctx.const_values.get(shape_input)?.clone();
 
             if target.contains(&-1) {
@@ -449,28 +477,32 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
             Some(target)
         }
         "Slice" => {
-            if node.get_input().is_empty() {
+            if node.input.as_slice().is_empty() {
                 return None;
             }
-            let data_shape = ctx.value_shapes.get(node.get_input()[0].as_str())?;
+            let data_shape = ctx.value_shapes.get(node.input.as_slice()[0].as_str())?;
             let starts = node
-                .get_input()
+                .input
+                .as_slice()
                 .get(1)
                 .and_then(|n| ctx.const_values.get(n))
                 .cloned()?;
             let ends = node
-                .get_input()
+                .input
+                .as_slice()
                 .get(2)
                 .and_then(|n| ctx.const_values.get(n))
                 .cloned()?;
             let axes = node
-                .get_input()
+                .input
+                .as_slice()
                 .get(3)
                 .and_then(|n| ctx.const_values.get(n))
                 .cloned()
                 .unwrap_or_else(|| (0..data_shape.len() as i64).collect());
             let steps = node
-                .get_input()
+                .input
+                .as_slice()
                 .get(4)
                 .and_then(|n| ctx.const_values.get(n))
                 .cloned()
@@ -509,16 +541,17 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
             Some(out)
         }
         "Gather" => {
-            if node.get_input().len() < 2 {
+            if node.input.as_slice().len() < 2 {
                 return None;
             }
-            let data_shape = ctx.value_shapes.get(node.get_input()[0].as_str())?;
-            let indices_shape = ctx.value_shapes.get(node.get_input()[1].as_str())?;
+            let data_shape = ctx.value_shapes.get(node.input.as_slice()[0].as_str())?;
+            let indices_shape = ctx.value_shapes.get(node.input.as_slice()[1].as_str())?;
             let mut axis = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "axis" && a.has_i())
-                .map(|a| a.get_i())
+                .find(|a| a.name.as_str() == "axis" && a.i != 0)
+                .map(|a| a.i)
                 .unwrap_or(0);
             if axis < 0 {
                 axis += data_shape.len() as i64;
@@ -537,15 +570,17 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
         }
         "Split" => {
             let input_shape = node
-                .get_input()
+                .input
+                .as_slice()
                 .first()
                 .and_then(|i| ctx.value_shapes.get(i))
                 .cloned()?;
             let mut axis = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "axis" && a.has_i())
-                .map(|a| a.get_i())
+                .find(|a| a.name.as_str() == "axis" && a.i != 0)
+                .map(|a| a.i)
                 .unwrap_or(0);
             if axis < 0 {
                 axis += input_shape.len() as i64;
@@ -555,10 +590,11 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
                 return None;
             }
             let splits = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "split")
-                .map(|a| a.get_ints().to_vec());
+                .find(|a| a.name.as_str() == "split")
+                .map(|a| a.ints.clone());
             if let Some(s) = splits {
                 if s.iter().any(|&v| v <= 0) {
                     return None;
@@ -571,7 +607,7 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
                 out[axis] = s[0];
                 Some(out)
             } else {
-                let outputs = node.get_output().len() as i64;
+                let outputs = node.output.as_slice().len() as i64;
                 if outputs == 0 || input_shape[axis] % outputs != 0 {
                     return None;
                 }
@@ -582,19 +618,21 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
             }
         }
         "ReduceMean" | "ReduceSum" | "ReduceMax" | "ReduceMin" => {
-            let input = node.get_input().first()?;
+            let input = node.input.as_slice().first()?;
             let input_shape = ctx.value_shapes.get(input)?;
             let axes: Vec<i64> = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "axes")
-                .map(|a| a.get_ints().to_vec())
+                .find(|a| a.name.as_str() == "axes")
+                .map(|a| a.ints.clone())
                 .unwrap_or_default();
             let keepdims = node
-                .get_attribute()
+                .attribute
+                .as_slice()
                 .iter()
-                .find(|a| a.get_name() == "keepdims" && a.has_i())
-                .map(|a| a.get_i() != 0)
+                .find(|a| a.name.as_str() == "keepdims" && a.i != 0)
+                .map(|a| a.i != 0)
                 .unwrap_or(true);
             if axes.is_empty() {
                 if keepdims {
@@ -631,8 +669,8 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
 
 fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool {
     let mut changed = false;
-    for node in graph.get_node() {
-        let outputs = node.get_output();
+    for node in graph.node.as_slice() {
+        let outputs = node.output.as_slice();
         if outputs.is_empty() {
             continue;
         }
@@ -640,8 +678,24 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
             continue;
         }
 
-        let op = node.get_op_type();
-        let inputs = node.get_input();
+        let op = node.op_type.as_str();
+        let inputs = node.input.as_slice();
+
+        // Shape nodes can be folded if the input shape is already known, even when the value is
+        // dynamic. This is critical for turning dynamic shape expressions into static vectors that
+        // downstream ops (Concat/Gather/Expand) can consume.
+        if op == "Shape" {
+            if let Some(inp) = inputs.first() {
+                if let Some(shape) = ctx.value_shapes.get(inp.as_str()) {
+                    let out_name = outputs[0].to_string();
+                    ctx.const_values.insert(out_name.clone(), shape.clone());
+                    ctx.value_shapes.insert(out_name, vec![shape.len() as i64]);
+                    changed = true;
+                    continue;
+                }
+            }
+        }
+
         let all_const = inputs
             .iter()
             .all(|i| ctx.const_values.contains_key(i.as_str()));
@@ -650,21 +704,11 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
         }
 
         match op {
-            "Shape" => {
-                if let Some(inp) = inputs.first() {
-                    if let Some(shape) = ctx.value_shapes.get(inp.as_str()) {
-                        let out_name = outputs[0].to_string();
-                        ctx.const_values.insert(out_name.clone(), shape.clone());
-                        ctx.value_shapes.insert(out_name, vec![shape.len() as i64]);
-                        changed = true;
-                    }
-                }
-            }
             "Concat" => {
                 let mut axis = 0i64;
-                for attr in node.get_attribute() {
-                    if attr.get_name() == "axis" && attr.has_i() {
-                        axis = attr.get_i();
+                for attr in node.attribute.as_slice() {
+                    if attr.name.as_str() == "axis" && attr.i != 0 {
+                        axis = attr.i;
                     }
                 }
                 if axis == 0 {
@@ -685,9 +729,9 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
             }
             "Gather" => {
                 let mut axis = 0i64;
-                for attr in node.get_attribute() {
-                    if attr.get_name() == "axis" && attr.has_i() {
-                        axis = attr.get_i();
+                for attr in node.attribute.as_slice() {
+                    if attr.name.as_str() == "axis" && attr.i != 0 {
+                        axis = attr.i;
                     }
                 }
                 if axis == 0 && inputs.len() >= 2 {
@@ -719,6 +763,119 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
                     }
                 }
             }
+            "Unsqueeze" => {
+                if inputs.is_empty() {
+                    continue;
+                }
+                let data = ctx.const_values.get(inputs[0].as_str()).cloned();
+                if data.is_none() {
+                    continue;
+                }
+
+                let mut axes: Vec<i64> = node
+                    .attribute
+                    .as_slice()
+                    .iter()
+                    .find(|a| a.name.as_str() == "axes")
+                    .map(|a| a.ints.clone())
+                    .unwrap_or_default();
+                if axes.is_empty() && inputs.len() > 1 {
+                    axes = ctx
+                        .const_values
+                        .get(inputs[1].as_str())
+                        .cloned()
+                        .unwrap_or_default();
+                }
+                if axes.is_empty() {
+                    continue;
+                }
+
+                let mut sorted_axes = axes.clone();
+                sorted_axes.sort();
+
+                let mut out_shape = ctx
+                    .value_shapes
+                    .get(inputs[0].as_str())
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let len = data.as_ref().map(|v| v.len()).unwrap_or(0);
+                        if len <= 1 {
+                            Vec::new()
+                        } else {
+                            vec![len as i64]
+                        }
+                    });
+
+                for axis in sorted_axes {
+                    let idx = if axis < 0 {
+                        (out_shape.len() as i64 + axis + 1) as usize
+                    } else {
+                        axis as usize
+                    };
+                    if idx > out_shape.len() {
+                        continue;
+                    }
+                    out_shape.insert(idx, 1);
+                }
+
+                let out_name = outputs[0].to_string();
+                ctx.const_values
+                    .insert(out_name.clone(), data.unwrap_or_default());
+                ctx.value_shapes.insert(out_name, out_shape);
+                changed = true;
+            }
+            "Equal" => {
+                if inputs.len() < 2 {
+                    continue;
+                }
+                let lhs = ctx.const_values.get(inputs[0].as_str()).cloned();
+                let rhs = ctx.const_values.get(inputs[1].as_str()).cloned();
+                if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
+                    if lhs.len() != rhs.len() {
+                        continue;
+                    }
+                    let values: Vec<i64> = lhs
+                        .iter()
+                        .zip(rhs.iter())
+                        .map(|(l, r)| if l == r { 1 } else { 0 })
+                        .collect();
+                    let out_name = outputs[0].to_string();
+                    let shape = if values.len() == 1 {
+                        Vec::new()
+                    } else {
+                        vec![values.len() as i64]
+                    };
+                    ctx.const_values.insert(out_name.clone(), values);
+                    ctx.value_shapes.insert(out_name, shape);
+                    changed = true;
+                }
+            }
+            "Where" => {
+                if inputs.len() < 3 {
+                    continue;
+                }
+                let cond = ctx.const_values.get(inputs[0].as_str()).cloned();
+                let a = ctx.const_values.get(inputs[1].as_str()).cloned();
+                let b = ctx.const_values.get(inputs[2].as_str()).cloned();
+                if let (Some(cond), Some(a), Some(b)) = (cond, a, b) {
+                    if cond.len() != a.len() || a.len() != b.len() {
+                        continue;
+                    }
+                    let mut out = Vec::with_capacity(a.len());
+                    for i in 0..a.len() {
+                        out.push(if cond[i] != 0 { a[i] } else { b[i] });
+                    }
+                    let out_name = outputs[0].to_string();
+                    let shape = if out.len() == 1 {
+                        Vec::new()
+                    } else {
+                        vec![out.len() as i64]
+                    };
+                    ctx.const_values.insert(out_name.clone(), out);
+                    ctx.value_shapes.insert(out_name, shape);
+                    changed = true;
+                }
+            }
             _ => {}
         }
     }
@@ -726,10 +883,10 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
 }
 
 fn read_int_tensor(tensor: &TensorProto) -> Vec<i64> {
-    let raw = tensor.get_raw_data();
+    let raw = tensor.raw_data.as_slice();
     if !raw.is_empty() {
-        match tensor.get_data_type() {
-            TensorProto_DataType::INT32 => raw
+        match tensor.data_type {
+            x if x == TensorProto_DataType::Int32 as i32 => raw
                 .chunks_exact(4)
                 .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as i64)
                 .collect(),
@@ -738,10 +895,15 @@ fn read_int_tensor(tensor: &TensorProto) -> Vec<i64> {
                 .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
                 .collect(),
         }
-    } else if !tensor.get_int64_data().is_empty() {
-        tensor.get_int64_data().to_vec()
-    } else if !tensor.get_int32_data().is_empty() {
-        tensor.get_int32_data().iter().map(|&v| v as i64).collect()
+    } else if !tensor.int64_data.as_slice().is_empty() {
+        tensor.int64_data.as_slice().to_vec()
+    } else if !tensor.int32_data.as_slice().is_empty() {
+        tensor
+            .int32_data
+            .as_slice()
+            .iter()
+            .map(|&v| v as i64)
+            .collect()
     } else {
         Vec::new()
     }
@@ -753,27 +915,45 @@ mod tests {
 
     #[test]
     fn dynamic_dim_requires_override() {
-        let mut dim = onnx::onnx::TensorShapeProto_Dimension::new();
-        dim.set_dim_param("batch".to_string());
-        let mut shape = onnx::onnx::TensorShapeProto::new();
-        shape.mut_dim().push(dim);
+        use crate::protos::onnx::{tensor_shape_proto, type_proto};
 
-        let mut tensor_type = onnx::onnx::TypeProto_Tensor::new();
-        tensor_type.set_elem_type(onnx::onnx::TensorProto_DataType::FLOAT);
-        tensor_type.set_shape(shape);
+        let dim = tensor_shape_proto::Dimension {
+            value: Some(tensor_shape_proto::dimension::Value::DimParam(
+                "batch".to_string(),
+            )),
+            ..Default::default()
+        };
+        let shape = crate::protos::onnx::TensorShapeProto {
+            dim: vec![dim],
+            ..Default::default()
+        };
 
-        let mut type_proto = onnx::onnx::TypeProto::new();
-        type_proto.set_tensor_type(tensor_type);
+        let tensor_type = type_proto::Tensor {
+            elem_type: crate::protos::onnx::TensorProto_DataType::Float.into(),
+            shape: Some(shape).into(),
+            ..Default::default()
+        };
 
-        let mut vi = onnx::onnx::ValueInfoProto::new();
-        vi.set_name("input".to_string());
-        vi.set_field_type(type_proto);
+        let type_proto = crate::protos::onnx::TypeProto {
+            value: Some(type_proto::Value::TensorType(tensor_type)),
+            ..Default::default()
+        };
 
-        let mut graph = onnx::onnx::GraphProto::new();
-        graph.mut_input().push(vi);
+        let vi = crate::protos::onnx::ValueInfoProto {
+            name: "input".to_string(),
+            r#type: Some(type_proto).into(),
+            ..Default::default()
+        };
 
-        let mut model = onnx::onnx::ModelProto::new();
-        model.set_graph(graph);
+        let graph = crate::protos::onnx::GraphProto {
+            input: vec![vi],
+            ..Default::default()
+        };
+
+        let model = crate::protos::onnx::ModelProto {
+            graph: Some(graph).into(),
+            ..Default::default()
+        };
 
         let res = infer_static_shapes(&model, &HashMap::new());
         assert!(matches!(
@@ -784,27 +964,45 @@ mod tests {
 
     #[test]
     fn override_allows_static_shape() {
-        let mut dim = onnx::onnx::TensorShapeProto_Dimension::new();
-        dim.set_dim_param("batch".to_string());
-        let mut shape = onnx::onnx::TensorShapeProto::new();
-        shape.mut_dim().push(dim);
+        use crate::protos::onnx::{tensor_shape_proto, type_proto};
 
-        let mut tensor_type = onnx::onnx::TypeProto_Tensor::new();
-        tensor_type.set_elem_type(onnx::onnx::TensorProto_DataType::FLOAT);
-        tensor_type.set_shape(shape);
+        let dim = tensor_shape_proto::Dimension {
+            value: Some(tensor_shape_proto::dimension::Value::DimParam(
+                "batch".to_string(),
+            )),
+            ..Default::default()
+        };
+        let shape = crate::protos::onnx::TensorShapeProto {
+            dim: vec![dim],
+            ..Default::default()
+        };
 
-        let mut type_proto = onnx::onnx::TypeProto::new();
-        type_proto.set_tensor_type(tensor_type);
+        let tensor_type = type_proto::Tensor {
+            elem_type: crate::protos::onnx::TensorProto_DataType::Float.into(),
+            shape: Some(shape).into(),
+            ..Default::default()
+        };
 
-        let mut vi = onnx::onnx::ValueInfoProto::new();
-        vi.set_name("input".to_string());
-        vi.set_field_type(type_proto);
+        let type_proto = crate::protos::onnx::TypeProto {
+            value: Some(type_proto::Value::TensorType(tensor_type)),
+            ..Default::default()
+        };
 
-        let mut graph = onnx::onnx::GraphProto::new();
-        graph.mut_input().push(vi);
+        let vi = crate::protos::onnx::ValueInfoProto {
+            name: "input".to_string(),
+            r#type: Some(type_proto).into(),
+            ..Default::default()
+        };
 
-        let mut model = onnx::onnx::ModelProto::new();
-        model.set_graph(graph);
+        let graph = crate::protos::onnx::GraphProto {
+            input: vec![vi],
+            ..Default::default()
+        };
+
+        let model = crate::protos::onnx::ModelProto {
+            graph: Some(graph).into(),
+            ..Default::default()
+        };
 
         let mut overrides = HashMap::new();
         overrides.insert("batch".to_string(), 1);
