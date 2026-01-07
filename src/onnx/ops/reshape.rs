@@ -1,6 +1,6 @@
 // Reshape operators: Reshape, Transpose, Concat, Split, Unsqueeze, Squeeze
 
-use crate::ast::{ConstDecl, ConstInit, Node};
+use crate::ast::Node;
 use crate::onnx::convert::{sanitize_identifier, OnnxError};
 use crate::onnx::ops::{ConversionContext, ConversionResult, OpHandler};
 use crate::protos::onnx::{NodeProto, TensorProto_DataType};
@@ -670,54 +670,19 @@ impl ReshapeHandler {
         let mut options = Map::new();
         options.insert("axes".to_string(), serde_json::json!(axes_values.clone()));
 
-        // Emit a small const for axes to ensure the unsqueeze always has an axes input.
-        let const_name_raw = format!("{}_axes", output_name);
-        let const_name = sanitize_identifier(&const_name_raw);
-        let const_decl = ConstDecl {
-            data_type: crate::ast::DataType::Int64,
-            shape: vec![axes_values.len() as u32],
-            init: ConstInit::InlineBytes {
-                bytes: axes_values
-                    .iter()
-                    .flat_map(|v| v.to_le_bytes().to_vec())
-                    .collect(),
+        // WebNN unsqueeze operation only takes the data input
+        // The axes parameter is provided as an attribute, not as an input
+        let mut result = ConversionResult::new(vec![Node {
+            id: output_name.clone(),
+            op: "unsqueeze".to_string(),
+            inputs: vec![input0], // Only the data input, no axes input
+            options: {
+                let mut o = options;
+                o.insert("axes".to_string(), serde_json::json!(axes_values));
+                o
             },
-        };
-
-        let mut result = ConversionResult::new(vec![
-            Node {
-                id: const_name.clone(),
-                op: "constant".to_string(),
-                inputs: vec![],
-                options: {
-                    let mut o = Map::new();
-                    o.insert("dataType".to_string(), serde_json::json!("int64"));
-                    o.insert(
-                        "shape".to_string(),
-                        serde_json::json!(vec![axes_values.len()]),
-                    );
-                    o.insert(
-                        "init".to_string(),
-                        serde_json::json!(format!("${}", const_name)),
-                    );
-                    o
-                },
-                outputs: None,
-            },
-            Node {
-                id: output_name.clone(),
-                op: "unsqueeze".to_string(),
-                inputs: vec![input0, const_name.clone()],
-                options: {
-                    let mut o = options;
-                    o.insert("axes".to_string(), serde_json::json!(axes_values));
-                    o
-                },
-                outputs: None,
-            },
-        ]);
-
-        result.consts.push((format!("${}", const_name), const_decl));
+            outputs: None,
+        }]);
 
         if let Some(output) = node.output.as_slice().first() {
             result
@@ -1066,20 +1031,74 @@ mod tests {
         };
 
         let result = handler.convert(&node, &context).unwrap();
-        // Unsqueeze now creates two nodes: a constant for axes and the unsqueeze operation
-        assert_eq!(result.nodes.len(), 2);
 
-        // First node should be the constant for axes
-        assert_eq!(result.nodes[0].op, "constant");
-        assert_eq!(result.nodes[0].inputs.len(), 0);
-        assert!(result.nodes[0].options.contains_key("dataType"));
-        assert!(result.nodes[0].options.contains_key("shape"));
+        // WebNN unsqueeze should create only 1 node (not 2)
+        // The axes parameter is provided as an attribute, not as an input operand
+        assert_eq!(result.nodes.len(), 1);
 
-        // Second node should be the unsqueeze operation
-        assert_eq!(result.nodes[1].op, "unsqueeze");
-        assert_eq!(result.nodes[1].inputs.len(), 2); // input + axes constant
-        assert_eq!(result.nodes[1].inputs[0], "x");
-        assert!(result.nodes[1].options.contains_key("axes"));
+        // The node should be the unsqueeze operation
+        assert_eq!(result.nodes[0].op, "unsqueeze");
+
+        // WebNN unsqueeze only takes the data input (no axes input)
+        assert_eq!(result.nodes[0].inputs.len(), 1);
+        assert_eq!(result.nodes[0].inputs[0], "x");
+
+        // Axes should be in the attributes/options
+        assert!(result.nodes[0].options.contains_key("axes"));
+        assert_eq!(
+            result.nodes[0].options.get("axes"),
+            Some(&serde_json::json!([0, 2]))
+        );
+    }
+
+    #[test]
+    fn test_convert_unsqueeze_opset13_with_input_axes() {
+        // Test ONNX opset 13+ where axes are provided as a second input tensor
+        let handler = ReshapeHandler;
+        let node = create_test_node("Unsqueeze", vec!["x", "axes_tensor"], vec!["y"]);
+
+        // Create a mock axes tensor [1, 3]
+        let axes_tensor = crate::protos::onnx::TensorProto {
+            name: "axes_tensor".to_string(),
+            data_type: crate::protos::onnx::TensorProto_DataType::Int64.into(),
+            dims: vec![2],
+            int64_data: vec![1, 3],
+            ..Default::default()
+        };
+
+        let leaked_axes: &'static crate::protos::onnx::TensorProto =
+            Box::leak(Box::new(axes_tensor));
+
+        let mut initializers = std::collections::HashMap::new();
+        initializers.insert("axes_tensor".to_string(), leaked_axes);
+        let value_shapes = std::collections::HashMap::new();
+        let const_values = std::collections::HashMap::new();
+        let value_ids = std::collections::HashMap::new();
+        let value_types = std::collections::HashMap::new();
+        let context = ConversionContext {
+            initializers: &initializers,
+            value_shapes: &value_shapes,
+            const_values: &const_values,
+            value_ids: &value_ids,
+            value_types: &value_types,
+        };
+
+        let result = handler.convert(&node, &context).unwrap();
+
+        // Should create only 1 WebNN unsqueeze node
+        assert_eq!(result.nodes.len(), 1);
+        assert_eq!(result.nodes[0].op, "unsqueeze");
+
+        // WebNN unsqueeze only takes the data input (no axes input)
+        assert_eq!(result.nodes[0].inputs.len(), 1);
+        assert_eq!(result.nodes[0].inputs[0], "x");
+
+        // Axes should be extracted from the tensor and placed in attributes
+        assert!(result.nodes[0].options.contains_key("axes"));
+        assert_eq!(
+            result.nodes[0].options.get("axes"),
+            Some(&serde_json::json!([1, 3]))
+        );
     }
 
     #[test]
