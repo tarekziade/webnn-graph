@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
+use webnn_onnx_utils::identifiers;
 
 const MIN_SUPPORTED_OPSET: i64 = 11;
 const MAX_SUPPORTED_OPSET: i64 = 18;
@@ -42,7 +43,7 @@ pub enum OnnxError {
 /// Sanitize ONNX identifiers for WebNN DSL compatibility
 /// Replaces problematic characters that would confuse the parser
 pub fn sanitize_identifier(name: &str) -> String {
-    name.replace("::", "__").replace([':', '.', '/'], "_")
+    identifiers::sanitize_for_webnn(name)
 }
 
 /// Infer output shape for an ONNX node based on its operation type and inputs
