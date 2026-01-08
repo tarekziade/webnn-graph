@@ -70,8 +70,10 @@ fn infer_shape(
             value_shapes.get(ins[0].as_str()).cloned()
         }
 
-        // Binary operations (with broadcasting) - prefer shape with more dimensions
-        // This is a simplification; proper implementation would handle broadcasting rules
+        // Binary operations (with broadcasting) - prefer shape with FEWER dimensions
+        // This prevents shape inflation: constants remain compact, not broadcast-expanded
+        // Rationale: Broadcasting happens implicitly in WebNN ops; storing inflated shapes
+        // causes compatibility issues when converting back to ONNX
         "Add" | "Sub" | "Mul" | "Div" | "Pow" => {
             let ins = node.input.as_slice();
             if ins.len() < 2 {
@@ -83,8 +85,9 @@ fn infer_shape(
 
             match (shape_a, shape_b) {
                 (Some(a), Some(b)) => {
-                    // Prefer the shape with more dimensions (likely the activation tensor)
-                    if a.len() >= b.len() {
+                    // Prefer the shape with FEWER dimensions to avoid shape inflation
+                    // Example: [129] + [1, 128, 1] → keep [129], not [1, 128, 129]
+                    if a.len() <= b.len() {
                         Some(a.clone())
                     } else {
                         Some(b.clone())
@@ -1064,6 +1067,8 @@ impl OnnxConverter {
             crate::onnx::shape_inference::infer_static_shapes(&self.model, &effective_overrides)
                 .map_err(|e| OnnxError::ShapeInference(e.to_string()))?;
 
+        // Initial seeding: use or_insert since these are the first values
+        // (no prior shapes to override)
         for (k, v) in inferred.value_shapes {
             value_shapes.entry(k).or_insert(v);
         }
@@ -1095,9 +1100,20 @@ impl OnnxConverter {
                             infer_shape(onnx_node, &value_shapes, &initializers_map, &const_values)
                         {
                             if let Some(output_name) = onnx_node.output.as_slice().first() {
-                                value_shapes
-                                    .entry(output_name.to_string())
-                                    .or_insert(inferred);
+                                // Debug: track shape changes for layer 15 operations
+                                if output_name.contains("layers_15_self_attn")
+                                    && (output_name.contains("Reshape")
+                                        || output_name.contains("Transpose"))
+                                {
+                                    eprintln!(
+                                        "[SHAPE DEBUG] {} {} -> {:?}",
+                                        onnx_node.op_type.as_str(),
+                                        output_name,
+                                        inferred
+                                    );
+                                }
+                                // Force the correct shape - shape inference computes exact output shape
+                                value_shapes.insert(output_name.to_string(), inferred);
                             }
                         }
                     }
@@ -1170,12 +1186,9 @@ impl OnnxConverter {
                             if shape.iter().all(|d| *d > 0) {
                                 const_values.insert(out.clone(), shape.clone());
                                 let inferred_shape = vec![shape.len() as i64];
-                                value_shapes
-                                    .entry(out.clone())
-                                    .or_insert(inferred_shape.clone());
-                                value_shapes
-                                    .entry(sanitize_identifier(&out))
-                                    .or_insert(inferred_shape);
+                                // Force the correct shape - Shape operation computes exact output shape
+                                value_shapes.insert(out.clone(), inferred_shape.clone());
+                                value_shapes.insert(sanitize_identifier(&out), inferred_shape);
                                 value_types.insert(out, DataType::Int64);
                             }
                         }
@@ -1216,12 +1229,9 @@ impl OnnxConverter {
                                     } else {
                                         vec![gathered.len() as i64]
                                     };
-                                    value_shapes
-                                        .entry(out.to_string())
-                                        .or_insert(out_shape.clone());
-                                    value_shapes
-                                        .entry(sanitize_identifier(out))
-                                        .or_insert(out_shape);
+                                    // Force the correct shape - Gather operation computes exact output shape
+                                    value_shapes.insert(out.to_string(), out_shape.clone());
+                                    value_shapes.insert(sanitize_identifier(out), out_shape);
                                     value_types.insert(out.to_string(), DataType::Int64);
                                 }
                             }
@@ -1267,12 +1277,9 @@ impl OnnxConverter {
                                 } else {
                                     vec![result_vals.len() as i64]
                                 };
-                                value_shapes
-                                    .entry(out.to_string())
-                                    .or_insert(out_shape.clone());
-                                value_shapes
-                                    .entry(sanitize_identifier(out))
-                                    .or_insert(out_shape);
+                                // Force the correct shape - Binary operations compute exact output shape
+                                value_shapes.insert(out.to_string(), out_shape.clone());
+                                value_shapes.insert(sanitize_identifier(out), out_shape);
                                 if let Some(dtype) = node
                                     .input
                                     .as_slice()
@@ -1296,7 +1303,8 @@ impl OnnxConverter {
                             } else {
                                 vec![vals.len() as i64]
                             };
-                            value_shapes.entry(out.to_string()).or_insert(out_shape);
+                            // Force the correct shape - Cast/Unsqueeze/Squeeze compute exact output shape
+                            value_shapes.insert(out.to_string(), out_shape);
                             if let Some(dtype) = value_types.get(inp).cloned() {
                                 value_types.insert(out.to_string(), dtype);
                             }
@@ -1341,12 +1349,9 @@ impl OnnxConverter {
                                     if let Some(out) = node.output.as_slice().first() {
                                         const_values.insert(out.to_string(), range_vals.clone());
                                         let out_shape = vec![range_vals.len() as i64];
-                                        value_shapes
-                                            .entry(out.to_string())
-                                            .or_insert(out_shape.clone());
-                                        value_shapes
-                                            .entry(sanitize_identifier(out))
-                                            .or_insert(out_shape);
+                                        // Force the correct shape - Range computes exact output shape
+                                        value_shapes.insert(out.to_string(), out_shape.clone());
+                                        value_shapes.insert(sanitize_identifier(out), out_shape);
                                         value_types.insert(out.to_string(), DataType::Int64);
                                     }
                                 }
@@ -1379,12 +1384,9 @@ impl OnnxConverter {
                         if all_const && (axis == 0 || axis == -1) {
                             const_values.insert(out.to_string(), concatenated.clone());
                             let out_shape = vec![concatenated.len() as i64];
-                            value_shapes
-                                .entry(out.to_string())
-                                .or_insert(out_shape.clone());
-                            value_shapes
-                                .entry(sanitize_identifier(out))
-                                .or_insert(out_shape);
+                            // Force the correct shape - Concat computes exact output shape
+                            value_shapes.insert(out.to_string(), out_shape.clone());
+                            value_shapes.insert(sanitize_identifier(out), out_shape);
                             value_types.insert(out.to_string(), DataType::Int64);
                         }
                     }
@@ -1425,12 +1427,10 @@ impl OnnxConverter {
                                 let filled_tensor = vec![fill_value; numel as usize];
                                 if let Some(out) = node.output.as_slice().first() {
                                     const_values.insert(out.to_string(), filled_tensor);
+                                    // Force the correct shape - ConstantOfShape creates exact output shape
+                                    value_shapes.insert(out.to_string(), shape_vals.clone());
                                     value_shapes
-                                        .entry(out.to_string())
-                                        .or_insert(shape_vals.clone());
-                                    value_shapes
-                                        .entry(sanitize_identifier(out))
-                                        .or_insert(shape_vals.clone());
+                                        .insert(sanitize_identifier(out), shape_vals.clone());
                                     value_types.insert(out.to_string(), DataType::Int64);
                                 }
                             }
@@ -1473,12 +1473,9 @@ impl OnnxConverter {
                                 } else {
                                     vec![result_vals.len() as i64]
                                 };
-                                value_shapes
-                                    .entry(out.to_string())
-                                    .or_insert(out_shape.clone());
-                                value_shapes
-                                    .entry(sanitize_identifier(out))
-                                    .or_insert(out_shape);
+                                // Force the correct shape - Equal operation computes exact output shape
+                                value_shapes.insert(out.to_string(), out_shape.clone());
+                                value_shapes.insert(sanitize_identifier(out), out_shape);
                                 value_types.insert(out.to_string(), DataType::Int64);
                             }
                         }
@@ -1529,12 +1526,9 @@ impl OnnxConverter {
                                 } else {
                                     vec![result_vals.len() as i64]
                                 };
-                                value_shapes
-                                    .entry(out.to_string())
-                                    .or_insert(out_shape.clone());
-                                value_shapes
-                                    .entry(sanitize_identifier(out))
-                                    .or_insert(out_shape);
+                                // Force the correct shape - Where operation computes exact output shape
+                                value_shapes.insert(out.to_string(), out_shape.clone());
+                                value_shapes.insert(sanitize_identifier(out), out_shape);
                                 value_types.insert(out.to_string(), DataType::Int64);
                             }
                         }

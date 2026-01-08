@@ -256,6 +256,7 @@ fn propagate_node_shapes(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn broadcast_shapes(a: &[i64], b: &[i64]) -> Option<Vec<i64>> {
     let mut result = Vec::new();
     let mut ai = a.iter().rev();
@@ -300,7 +301,16 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
             let a = node.input.as_slice()[0].as_str();
             let b = node.input.as_slice()[1].as_str();
             match (ctx.value_shapes.get(a), ctx.value_shapes.get(b)) {
-                (Some(sa), Some(sb)) => broadcast_shapes(sa, sb),
+                // Prefer smaller shape to avoid inflation
+                // Rationale: Broadcasting happens implicitly; storing inflated shapes
+                // breaks ONNX round-trip conversion
+                (Some(sa), Some(sb)) => {
+                    if sa.len() <= sb.len() {
+                        Some(sa.clone())
+                    } else {
+                        Some(sb.clone())
+                    }
+                }
                 _ => None,
             }
         }

@@ -195,12 +195,26 @@ impl ReshapeHandler {
                 } else {
                     shape_values = ds.clone();
                 }
+                // Debug: track shape derivation for layer 15
+                if output_name.contains("layers_15_self_attn") && output_name.contains("Reshape") {
+                    eprintln!(
+                        "[RESHAPE FALLBACK] {} from input {:?} -> {:?}",
+                        output_name, ds, shape_values
+                    );
+                }
             } else if let Some(ds) = context.value_shapes.get(&data_input) {
                 if ds.len() >= 3 {
                     let tail: i64 = ds[2..].iter().product();
                     shape_values = vec![ds[0], ds[1], tail];
                 } else {
                     shape_values = ds.clone();
+                }
+                // Debug: track shape derivation for layer 15
+                if output_name.contains("layers_15_self_attn") && output_name.contains("Reshape") {
+                    eprintln!(
+                        "[RESHAPE FALLBACK] {} from input {:?} -> {:?}",
+                        output_name, ds, shape_values
+                    );
                 }
             } else {
                 return Err(OnnxError::InvalidShape(format!(
@@ -209,6 +223,15 @@ impl ReshapeHandler {
                     shape_input_raw
                 )));
             }
+        } else if shape_from_const
+            && output_name.contains("layers_15_self_attn")
+            && output_name.contains("Reshape")
+        {
+            // Debug: track const-derived shapes for layer 15
+            eprintln!(
+                "[RESHAPE CONST] {} newShape from const -> {:?}",
+                output_name, shape_values
+            );
         }
 
         // Handle -1 (dimension inference marker) - compute the inferred dimension
@@ -324,6 +347,14 @@ impl ReshapeHandler {
             candidate.iter().map(|&v| v as u32).collect()
         };
 
+        // Debug: final shape for layer 15
+        if output_name.contains("layers_15_self_attn") && output_name.contains("Reshape") {
+            eprintln!(
+                "[RESHAPE FINAL] {} final newShape -> {:?}",
+                output_name, shape_values
+            );
+        }
+
         let mut options = Map::new();
         options.insert("newShape".to_string(), serde_json::json!(shape_values));
 
@@ -415,6 +446,37 @@ impl ReshapeHandler {
             )));
         }
 
+        // Determine if this is a broadcast (WebNN expand) or reshape operation
+        // by checking if shapes are broadcast-compatible (ONNX Expand rules)
+        let input_shape = context.value_shapes.get(&data_input_raw);
+        let op_type = if let Some(input_shape) = input_shape {
+            // Check broadcast compatibility: align from right, dimensions must be equal or one must be 1
+            let mut is_broadcast_compatible = true;
+            let input_rank = input_shape.len();
+            let target_rank = shape_values.len();
+
+            for i in 0..input_rank.min(target_rank) {
+                let input_dim = input_shape[input_rank - 1 - i];
+                let target_dim = shape_values[target_rank - 1 - i];
+
+                // Dimensions are compatible if they're equal or either is 1
+                if input_dim != target_dim && input_dim != 1 && target_dim != 1 {
+                    is_broadcast_compatible = false;
+                    break;
+                }
+            }
+
+            if is_broadcast_compatible {
+                "expand"
+            } else {
+                // Not broadcast-compatible, use reshape instead
+                "reshape"
+            }
+        } else {
+            // No shape info available, assume expand (broadcasting)
+            "expand"
+        };
+
         let mut options = Map::new();
         options.insert(
             "newShape".to_string(),
@@ -423,7 +485,7 @@ impl ReshapeHandler {
 
         let mut result = ConversionResult::new(vec![Node {
             id: output_name.clone(),
-            op: "expand".to_string(),
+            op: op_type.to_string(),
             inputs: vec![data_input],
             options,
             outputs: None,
