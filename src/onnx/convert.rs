@@ -1666,6 +1666,18 @@ impl OnnxConverter {
                 }
             }
 
+            // Track output shapes after conversion to prevent shape inflation
+            // Use .insert() to force correct shapes (not .or_insert() which preserves old shapes)
+            if let Some(inferred_shape) =
+                infer_shape(onnx_node, &value_shapes, &initializers_map, &const_values)
+            {
+                for output_name in onnx_node.output.as_slice() {
+                    // Insert shape for both raw and sanitized names
+                    value_shapes.insert(output_name.to_string(), inferred_shape.clone());
+                    value_shapes.insert(sanitize_identifier(output_name), inferred_shape.clone());
+                }
+            }
+
             self.graph.nodes.extend(converted.nodes);
         }
 
