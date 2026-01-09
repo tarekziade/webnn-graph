@@ -133,9 +133,12 @@ impl UtilityHandler {
         let delta = self.read_scalar_i64(&inputs[2], context);
 
         if start.is_none() || limit.is_none() || delta.is_none() {
-            eprintln!(
+            crate::debug_println!(
                 "[range] falling back to default scalars for {}: start={:?} limit={:?} delta={:?}",
-                node_name, start, limit, delta
+                node_name,
+                start,
+                limit,
+                delta
             );
         }
 
@@ -538,9 +541,10 @@ impl UtilityHandler {
                     let rank = shape.len();
                     starts.get_or_insert(vec![0; rank]);
                     ends.get_or_insert(shape.clone());
-                    eprintln!(
+                    crate::debug_println!(
                         "[slice] falling back to data shape {:?} for {}",
-                        shape, node_name
+                        shape,
+                        node_name
                     );
                 } else {
                     // As a last resort, try to pull starts/ends from sibling consts
@@ -554,9 +558,11 @@ impl UtilityHandler {
                     if starts.is_none() || ends.is_none() {
                         starts.get_or_insert(vec![0]);
                         ends.get_or_insert(vec![1]);
-                        eprintln!(
+                        crate::debug_println!(
                             "[slice] using default starts/ends for {}, starts={:?} ends={:?}",
-                            node_name, starts, ends
+                            node_name,
+                            starts,
+                            ends
                         );
                     }
                 }

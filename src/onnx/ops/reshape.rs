@@ -197,9 +197,11 @@ impl ReshapeHandler {
                 }
                 // Debug: track shape derivation for layer 15
                 if output_name.contains("layers_15_self_attn") && output_name.contains("Reshape") {
-                    eprintln!(
+                    crate::debug_println!(
                         "[RESHAPE FALLBACK] {} from input {:?} -> {:?}",
-                        output_name, ds, shape_values
+                        output_name,
+                        ds,
+                        shape_values
                     );
                 }
             } else if let Some(ds) = context.value_shapes.get(&data_input) {
@@ -211,9 +213,11 @@ impl ReshapeHandler {
                 }
                 // Debug: track shape derivation for layer 15
                 if output_name.contains("layers_15_self_attn") && output_name.contains("Reshape") {
-                    eprintln!(
+                    crate::debug_println!(
                         "[RESHAPE FALLBACK] {} from input {:?} -> {:?}",
-                        output_name, ds, shape_values
+                        output_name,
+                        ds,
+                        shape_values
                     );
                 }
             } else {
@@ -228,9 +232,10 @@ impl ReshapeHandler {
             && output_name.contains("Reshape")
         {
             // Debug: track const-derived shapes for layer 15
-            eprintln!(
+            crate::debug_println!(
                 "[RESHAPE CONST] {} newShape from const -> {:?}",
-                output_name, shape_values
+                output_name,
+                shape_values
             );
         }
 
@@ -299,9 +304,10 @@ impl ReshapeHandler {
 
                 inferred_shape
             } else {
-                eprintln!(
+                crate::debug_println!(
                     "[reshape] missing input shape for {}, shape {:?}; replacing -1 with 1",
-                    data_input_raw, shape_values
+                    data_input_raw,
+                    shape_values
                 );
                 shape_values
                     .iter()
@@ -332,7 +338,7 @@ impl ReshapeHandler {
                 }
 
                 let hidden = shape_values.last().copied().unwrap_or(1);
-                eprintln!(
+                crate::debug_println!(
                     "[reshape] repair: {} input_shape={:?} target_shape={:?} batch_hint={} seq_hint={} hidden={}",
                     output_name, input_shape, shape_values, batch_hint, seq_hint, hidden
                 );
@@ -349,9 +355,10 @@ impl ReshapeHandler {
 
         // Debug: final shape for layer 15
         if output_name.contains("layers_15_self_attn") && output_name.contains("Reshape") {
-            eprintln!(
+            crate::debug_println!(
                 "[RESHAPE FINAL] {} final newShape -> {:?}",
-                output_name, shape_values
+                output_name,
+                shape_values
             );
         }
 
@@ -402,14 +409,14 @@ impl ReshapeHandler {
 
         // Debug logging for all Expand operations
         if shape_input_raw.contains("rotary") || data_input_raw.contains("rotary") {
-            eprintln!("[EXPAND DEBUG] Node: {}", node_name);
-            eprintln!("  data_input_raw: {}", data_input_raw);
-            eprintln!("  shape_input_raw: {}", shape_input_raw);
-            eprintln!(
+            crate::debug_println!("[EXPAND DEBUG] Node: {}", node_name);
+            crate::debug_println!("  data_input_raw: {}", data_input_raw);
+            crate::debug_println!("  shape_input_raw: {}", shape_input_raw);
+            crate::debug_println!(
                 "  In const_values: {}",
                 context.const_values.contains_key(&shape_input_raw)
             );
-            eprintln!(
+            crate::debug_println!(
                 "  In initializers: {}",
                 context.initializers.contains_key(shape_input_raw.as_str())
             );
@@ -418,12 +425,12 @@ impl ReshapeHandler {
         let shape_values: Vec<i64> =
             if let Some(values) = context.const_values.get(&shape_input_raw) {
                 if shape_input_raw.contains("rotary") || data_input_raw.contains("rotary") {
-                    eprintln!("  Shape from const_values: {:?}", values);
+                    crate::debug_println!("  Shape from const_values: {:?}", values);
                 }
                 values.clone()
             } else if let Some(initializer) = context.initializers.get(shape_input_raw.as_str()) {
                 if shape_input_raw.contains("rotary") || data_input_raw.contains("rotary") {
-                    eprintln!("  Shape from initializer");
+                    crate::debug_println!("  Shape from initializer");
                 }
                 let raw_data = initializer.raw_data.as_slice();
                 if !raw_data.is_empty() {

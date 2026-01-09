@@ -203,7 +203,11 @@ impl<'a> ConstantFoldingContext<'a> {
                         constants.insert((*name).clone(), ct);
                     }
                     Err(e) => {
-                        eprintln!("Warning: Failed to parse initializer '{}': {}", name, e);
+                        crate::debug_println!(
+                            "Warning: Failed to parse initializer '{}': {}",
+                            name,
+                            e
+                        );
                     }
                 }
             }
@@ -322,7 +326,7 @@ fn evaluate_constant_nodes(
                     result.nodes_folded += 1;
                 }
                 Err(e) => {
-                    eprintln!(
+                    crate::debug_println!(
                         "Warning: Failed to evaluate constant node '{}' ({}): {}",
                         node.name.as_str(),
                         node.op_type.as_str(),
@@ -396,7 +400,7 @@ pub fn fold_constants_in_model(
 
         total_folded += result.nodes_folded;
 
-        eprintln!(
+        crate::debug_println!(
             "Constant folding iteration {}: {} nodes folded",
             iteration + 1,
             result.nodes_folded

@@ -871,9 +871,9 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
 
                 // Debug: always log Where operations that involve rotary
                 if inputs.iter().any(|i| i.contains("rotary")) {
-                    eprintln!("[WHERE DEBUG] Processing Where node");
-                    eprintln!("  inputs: {:?}", inputs);
-                    eprintln!("  outputs: {:?}", outputs);
+                    crate::debug_println!("[WHERE DEBUG] Processing Where node");
+                    crate::debug_println!("  inputs: {:?}", inputs);
+                    crate::debug_println!("  outputs: {:?}", outputs);
                 }
 
                 let cond = ctx.const_values.get(inputs[0].as_str()).cloned();
@@ -881,9 +881,9 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
                 let b = ctx.const_values.get(inputs[2].as_str()).cloned();
 
                 if inputs.iter().any(|i| i.contains("rotary")) {
-                    eprintln!("  cond const: {}", cond.is_some());
-                    eprintln!("  a const: {}", a.is_some());
-                    eprintln!("  b const: {}", b.is_some());
+                    crate::debug_println!("  cond const: {}", cond.is_some());
+                    crate::debug_println!("  a const: {}", a.is_some());
+                    crate::debug_println!("  b const: {}", b.is_some());
                 }
 
                 // Case 1: All inputs are constant - evaluate fully
@@ -901,12 +901,12 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
 
                     let mut out = if is_trivial(&a) && !is_trivial(&b) {
                         if inputs.iter().any(|i| i.contains("rotary")) {
-                            eprintln!("[WHERE SMART EVAL] Preferring non-trivial branch b={:?} over trivial a={:?}", b, a);
+                            crate::debug_println!("[WHERE SMART EVAL] Preferring non-trivial branch b={:?} over trivial a={:?}", b, a);
                         }
                         b
                     } else if is_trivial(&b) && !is_trivial(&a) {
                         if inputs.iter().any(|i| i.contains("rotary")) {
-                            eprintln!("[WHERE SMART EVAL] Preferring non-trivial branch a={:?} over trivial b={:?}", a, b);
+                            crate::debug_println!("[WHERE SMART EVAL] Preferring non-trivial branch a={:?} over trivial b={:?}", a, b);
                         }
                         a
                     } else {
@@ -937,7 +937,7 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
                                             if out[i] == -1 {
                                                 out[i] = data_shape[i];
                                                 if inputs.iter().any(|inp| inp.contains("rotary")) {
-                                                    eprintln!("[WHERE RESOLVE] Resolved -1 at position {} to {} from data shape {:?}", i, data_shape[i], data_shape);
+                                                    crate::debug_println!("[WHERE RESOLVE] Resolved -1 at position {} to {} from data shape {:?}", i, data_shape[i], data_shape);
                                                 }
                                             }
                                         }
@@ -954,7 +954,7 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
                         vec![out.len() as i64]
                     };
                     if inputs.iter().any(|i| i.contains("rotary")) {
-                        eprintln!("[WHERE STORE] Storing {} = {:?}", out_name, out);
+                        crate::debug_println!("[WHERE STORE] Storing {} = {:?}", out_name, out);
                     }
                     ctx.const_values.insert(out_name.clone(), out);
                     ctx.value_shapes.insert(out_name, shape);
@@ -978,7 +978,7 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
                         if is_trivial_constant(a_vals) && b_shape.is_some() {
                             // Prefer dynamic 'b' over trivial constant 'a'
                             // Use the shape of 'b' as the constant values for the Where output
-                            eprintln!("[WHERE HEURISTIC] Preferring dynamic input {} (shape {:?}) over trivial constant {:?}", inputs[2], b_shape, a_vals);
+                            crate::debug_println!("[WHERE HEURISTIC] Preferring dynamic input {} (shape {:?}) over trivial constant {:?}", inputs[2], b_shape, a_vals);
                             b_shape.cloned()
                         } else {
                             Some(a_vals.clone())
@@ -988,7 +988,7 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
                         if is_trivial_constant(b_vals) && a_shape.is_some() {
                             // Prefer dynamic 'a' over trivial constant 'b'
                             // Use the shape of 'a' as the constant values for the Where output
-                            eprintln!("[WHERE HEURISTIC] Preferring dynamic input {} (shape {:?}) over trivial constant {:?}", inputs[1], a_shape, b_vals);
+                            crate::debug_println!("[WHERE HEURISTIC] Preferring dynamic input {} (shape {:?}) over trivial constant {:?}", inputs[1], a_shape, b_vals);
                             a_shape.cloned()
                         } else {
                             Some(b_vals.clone())
@@ -1015,9 +1015,10 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
         }
     }
     if where_count > 0 {
-        eprintln!(
+        crate::debug_println!(
             "[FOLD DEBUG] Processed {} Where nodes, changed={}",
-            where_count, changed
+            where_count,
+            changed
         );
     }
     changed

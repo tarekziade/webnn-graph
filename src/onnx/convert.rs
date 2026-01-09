@@ -812,7 +812,7 @@ impl OnnxConverter {
                 || !initializer.double_data.as_slice().is_empty();
 
             if !has_data {
-                eprintln!("Warning: Skipping initializer '{}' with no data", name);
+                crate::debug_println!("Warning: Skipping initializer '{}' with no data", name);
                 continue;
             }
 
@@ -1080,9 +1080,14 @@ impl OnnxConverter {
             // earlier wrong values (e.g., Where operation heuristics)
             if k.contains("rotary") && k.contains("Where") {
                 if let Some(old_val) = const_values.get(&k) {
-                    eprintln!("[CONVERT] Overwriting {} from {:?} to {:?}", k, old_val, v);
+                    crate::debug_println!(
+                        "[CONVERT] Overwriting {} from {:?} to {:?}",
+                        k,
+                        old_val,
+                        v
+                    );
                 } else {
-                    eprintln!("[CONVERT] Inserting new {} = {:?}", k, v);
+                    crate::debug_println!("[CONVERT] Inserting new {} = {:?}", k, v);
                 }
             }
             const_values.insert(k, v);
@@ -1114,7 +1119,7 @@ impl OnnxConverter {
                                     && (output_name.contains("Reshape")
                                         || output_name.contains("Transpose"))
                                 {
-                                    eprintln!(
+                                    crate::debug_println!(
                                         "[SHAPE DEBUG] {} {} -> {:?}",
                                         onnx_node.op_type.as_str(),
                                         output_name,
@@ -1132,7 +1137,7 @@ impl OnnxConverter {
                     }
 
                     if iteration == max_iterations - 1 {
-                        eprintln!(
+                        crate::debug_println!(
                             "Warning: Shape propagation reached max iterations ({}/{})",
                             value_shapes.len(),
                             onnx_graph.node.as_slice().len()
@@ -1163,19 +1168,19 @@ impl OnnxConverter {
                 }
             }
 
-            eprintln!(
+            crate::debug_println!(
                 "[debug] layer_norm shape {:?}",
                 value_shapes.get("/decoder/block.0/layer.0/layer_norm/Mul_1_output_0")
             );
-            eprintln!(
+            crate::debug_println!(
                 "[debug] matmul q shape {:?}",
                 value_shapes.get("/decoder/block.0/layer.0/SelfAttention/q/MatMul_output_0")
             );
-            eprintln!(
+            crate::debug_println!(
                 "[debug] input_ids shape {:?}",
                 value_shapes.get("input_ids")
             );
-            eprintln!(
+            crate::debug_println!(
                 "[debug] ln div shape {:?}",
                 value_shapes.get("/decoder/block.0/layer.0/layer_norm/Div_output_0")
             );
@@ -1184,7 +1189,7 @@ impl OnnxConverter {
 
             // DEBUG: Check value before propagation
             if let Some(val) = const_values.get("/model/rotary_emb/Where_output_0") {
-                eprintln!("[PROP BEFORE] /model/rotary_emb/Where_output_0 = {:?}", val);
+                crate::debug_println!("[PROP BEFORE] /model/rotary_emb/Where_output_0 = {:?}", val);
             }
 
             // Extend const value map for const-foldable shapes
@@ -1397,7 +1402,11 @@ impl OnnxConverter {
 
                         if all_const && (axis == 0 || axis == -1) {
                             if out.contains("rotary") && out.contains("Where") {
-                                eprintln!("[CONCAT WRITE] Writing {} = {:?}", out, concatenated);
+                                crate::debug_println!(
+                                    "[CONCAT WRITE] Writing {} = {:?}",
+                                    out,
+                                    concatenated
+                                );
                             }
                             const_values.insert(out.to_string(), concatenated.clone());
                             let out_shape = vec![concatenated.len() as i64];
@@ -1533,12 +1542,12 @@ impl OnnxConverter {
 
                             let result_vals = if is_trivial(x) && !is_trivial(y) {
                                 if out.contains("rotary") {
-                                    eprintln!("[PROP WHERE] Preferring non-trivial y={:?} over trivial x={:?}", y, x);
+                                    crate::debug_println!("[PROP WHERE] Preferring non-trivial y={:?} over trivial x={:?}", y, x);
                                 }
                                 y.clone()
                             } else if is_trivial(y) && !is_trivial(x) {
                                 if out.contains("rotary") {
-                                    eprintln!("[PROP WHERE] Preferring non-trivial x={:?} over trivial y={:?}", x, y);
+                                    crate::debug_println!("[PROP WHERE] Preferring non-trivial x={:?} over trivial y={:?}", x, y);
                                 }
                                 x.clone()
                             } else {
@@ -1590,13 +1599,13 @@ impl OnnxConverter {
 
             // DEBUG: Check value after propagation pass
             if let Some(val) = const_values.get("/model/rotary_emb/Where_output_0") {
-                eprintln!("[PROP AFTER] /model/rotary_emb/Where_output_0 = {:?}", val);
+                crate::debug_println!("[PROP AFTER] /model/rotary_emb/Where_output_0 = {:?}", val);
             }
         }
 
         // DEBUG: Check value before node conversion
         if let Some(val) = const_values.get("/model/rotary_emb/Where_output_0") {
-            eprintln!("[NODE CONV] /model/rotary_emb/Where_output_0 = {:?}", val);
+            crate::debug_println!("[NODE CONV] /model/rotary_emb/Where_output_0 = {:?}", val);
         }
 
         for onnx_node in onnx_graph.node.as_slice() {
@@ -1784,11 +1793,11 @@ pub fn convert_onnx<P: AsRef<Path>>(
 
     // Apply constant folding if optimize flag is set
     if options.optimize {
-        eprintln!("Running constant folding...");
+        crate::debug_println!("Running constant folding...");
         let evaluators = crate::onnx::constant_folding::evaluators::get_evaluators();
         let nodes_folded =
             crate::onnx::constant_folding::fold_constants_in_model(&mut model, &evaluators)?;
-        eprintln!("Constant folding: {} nodes folded", nodes_folded);
+        crate::debug_println!("Constant folding: {} nodes folded", nodes_folded);
     }
 
     // Merge overrides from sidecar dims file if provided implicitly and not already set
@@ -1900,7 +1909,7 @@ fn extract_weights_from_onnx(
                 double_data.iter().flat_map(|&v| v.to_le_bytes()).collect()
             } else {
                 // No data at all - skip this initializer
-                eprintln!("Warning: Skipping initializer '{}' with no data", name);
+                crate::debug_println!("Warning: Skipping initializer '{}' with no data", name);
                 continue;
             }
         } else {

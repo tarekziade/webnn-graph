@@ -79,7 +79,7 @@ pub fn pack_weights(manifest_path: &str, input_dir: &str, output_path: &str) -> 
         current_offset += entry.byte_length;
     }
 
-    eprintln!(
+    crate::debug_println!(
         "Packed {} tensors ({} bytes) into {}",
         manifest.tensors.len(),
         current_offset,
@@ -140,13 +140,16 @@ pub fn unpack_weights(weights_path: &str, manifest_path: &str, output_dir: &str)
         fs::write(&output_path, tensor_data)
             .with_context(|| format!("Failed to write tensor file: {:?}", output_path))?;
 
-        eprintln!(
+        crate::debug_println!(
             "Extracted tensor '{}': {} bytes ({:?}, shape={:?})",
-            name, entry.byte_length, entry.data_type, entry.shape
+            name,
+            entry.byte_length,
+            entry.data_type,
+            entry.shape
         );
     }
 
-    eprintln!(
+    crate::debug_println!(
         "Unpacked {} tensors from {} into {}",
         manifest.tensors.len(),
         weights_path,
@@ -221,7 +224,7 @@ pub fn create_manifest(input_dir: &str, output_path: &str, endianness: &str) -> 
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
     fs::write(output_path, manifest_json).context("Failed to write manifest file")?;
 
-    eprintln!(
+    crate::debug_println!(
         "Created manifest with {} tensors: {}",
         manifest.tensors.len(),
         output_path
@@ -293,7 +296,7 @@ pub fn extract_weights(
                     },
                 );
 
-                eprintln!(
+                crate::debug_println!(
                     "Extracted tensor '{}': {} bytes ({:?}, shape={:?})",
                     name,
                     bytes.len(),
@@ -319,7 +322,7 @@ pub fn extract_weights(
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
     fs::write(manifest_file, manifest_json).context("Failed to write manifest file")?;
 
-    eprintln!(
+    crate::debug_println!(
         "Created manifest with {} tensors: {}",
         manifest.tensors.len(),
         manifest_file
@@ -402,9 +405,12 @@ pub fn inline_weights(
                     },
                 );
 
-                eprintln!(
+                crate::debug_println!(
                     "Inlined tensor '{}': {} bytes ({:?}, shape={:?})",
-                    name, entry.byte_length, entry.data_type, entry.shape
+                    name,
+                    entry.byte_length,
+                    entry.data_type,
+                    entry.shape
                 );
             }
             _ => {

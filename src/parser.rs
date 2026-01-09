@@ -228,7 +228,7 @@ fn parse_call(p: Pair<Rule>) -> Result<ParsedExpr, ParseError> {
     // Debug: trace concat operations
     let is_concat = op == "concat";
     if is_concat {
-        eprintln!("[PARSER DEBUG] Parsing concat operation");
+        crate::debug_println!("[PARSER DEBUG] Parsing concat operation");
     }
 
     if let Some(args) = it.next() {
@@ -246,7 +246,7 @@ fn parse_call(p: Pair<Rule>) -> Result<ParsedExpr, ParseError> {
                 };
 
                 if is_concat {
-                    eprintln!(
+                    crate::debug_println!(
                         "[PARSER DEBUG]   arg[{}]: first.rule={:?}, first.as_str()={}, has_next={}",
                         arg_idx,
                         first.as_rule(),
@@ -254,7 +254,7 @@ fn parse_call(p: Pair<Rule>) -> Result<ParsedExpr, ParseError> {
                         a.peek().is_some()
                     );
                     if let Some(next) = a.peek() {
-                        eprintln!(
+                        crate::debug_println!(
                             "[PARSER DEBUG]   arg[{}]: next.rule={:?}, next.as_str()={}",
                             arg_idx,
                             next.as_rule(),
@@ -271,13 +271,13 @@ fn parse_call(p: Pair<Rule>) -> Result<ParsedExpr, ParseError> {
                     let key = first.as_str().to_string();
                     let val = parse_value(a.next().unwrap())?;
                     if is_concat {
-                        eprintln!("[PARSER DEBUG]   Named argument: {}={:?}", key, val);
+                        crate::debug_println!("[PARSER DEBUG]   Named argument: {}={:?}", key, val);
                     }
                     options.insert(key, val);
                 } else {
                     // Positional argument
                     if is_concat {
-                        eprintln!(
+                        crate::debug_println!(
                             "[PARSER DEBUG]   Positional argument: rule={:?}",
                             first.as_rule()
                         );
@@ -300,9 +300,10 @@ fn parse_call(p: Pair<Rule>) -> Result<ParsedExpr, ParseError> {
     }
 
     if is_concat {
-        eprintln!(
+        crate::debug_println!(
             "[PARSER DEBUG] Concat parsed: inputs={:?}, options={:?}",
-            inputs, options
+            inputs,
+            options
         );
     }
 

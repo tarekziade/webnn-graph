@@ -18,6 +18,10 @@ use webnn_graph::weights_io::{
 #[command(name = "webnn-graph")]
 #[command(about = "WebNN Graph DSL tools", long_about = None)]
 struct Cli {
+    /// Enable debug output
+    #[arg(long, global = true)]
+    debug: bool,
+
     #[command(subcommand)]
     cmd: Command,
 }
@@ -142,6 +146,11 @@ fn load_graph(path: &str) -> anyhow::Result<GraphJson> {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Enable debug mode if --debug flag is set
+    if cli.debug {
+        webnn_graph::debug::enable();
+    }
 
     match cli.cmd {
         Command::Parse { path } => {
