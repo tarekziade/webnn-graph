@@ -1076,7 +1076,16 @@ impl OnnxConverter {
             value_types.entry(k).or_insert(v);
         }
         for (k, v) in inferred.const_values {
-            const_values.entry(k).or_insert(v);
+            // Use insert() instead of or_insert() to allow shape inference to correct
+            // earlier wrong values (e.g., Where operation heuristics)
+            if k.contains("rotary") && k.contains("Where") {
+                if let Some(old_val) = const_values.get(&k) {
+                    eprintln!("[CONVERT] Overwriting {} from {:?} to {:?}", k, old_val, v);
+                } else {
+                    eprintln!("[CONVERT] Inserting new {} = {:?}", k, v);
+                }
+            }
+            const_values.insert(k, v);
         }
 
         // Propagate shapes and fold constant shape expressions in a few passes
@@ -1172,6 +1181,11 @@ impl OnnxConverter {
             );
 
             let consts_before = const_values.len();
+
+            // DEBUG: Check value before propagation
+            if let Some(val) = const_values.get("/model/rotary_emb/Where_output_0") {
+                eprintln!("[PROP BEFORE] /model/rotary_emb/Where_output_0 = {:?}", val);
+            }
 
             // Extend const value map for const-foldable shapes
             for node in onnx_graph.node.as_slice() {
@@ -1382,6 +1396,9 @@ impl OnnxConverter {
                             .unwrap_or(0);
 
                         if all_const && (axis == 0 || axis == -1) {
+                            if out.contains("rotary") && out.contains("Where") {
+                                eprintln!("[CONCAT WRITE] Writing {} = {:?}", out, concatenated);
+                            }
                             const_values.insert(out.to_string(), concatenated.clone());
                             let out_shape = vec![concatenated.len() as i64];
                             // Force the correct shape - Concat computes exact output shape
@@ -1483,6 +1500,15 @@ impl OnnxConverter {
                 } else if op_type == "Where" {
                     // Where(condition, x, y) -> select x where condition is true, y otherwise
                     if node.input.as_slice().len() >= 3 {
+                        let out_name = node.output.as_slice().first().map(|s| s.as_str());
+
+                        // Skip if already computed by shape inference (to preserve smart heuristics)
+                        if let Some(out) = out_name {
+                            if const_values.contains_key(out) {
+                                continue;
+                            }
+                        }
+
                         if let (Some(cond), Some(x), Some(y), Some(out)) = (
                             node.input
                                 .as_slice()
@@ -1498,27 +1524,49 @@ impl OnnxConverter {
                                 .and_then(|i| const_values.get(i)),
                             node.output.as_slice().first(),
                         ) {
-                            let mut result_vals = Vec::new();
-                            let (cond_len, x_len, y_len) = (cond.len(), x.len(), y.len());
-                            let max_len = cond_len.max(x_len).max(y_len);
-                            for idx in 0..max_len {
-                                let cond_v = if cond_len == 1 {
-                                    cond[0]
-                                } else {
-                                    cond.get(idx).copied().unwrap_or(0)
-                                };
-                                let x_v = if x_len == 1 {
-                                    x[0]
-                                } else {
-                                    x.get(idx).copied().unwrap_or(0)
-                                };
-                                let y_v = if y_len == 1 {
-                                    y[0]
-                                } else {
-                                    y.get(idx).copied().unwrap_or(0)
-                                };
-                                result_vals.push(if cond_v != 0 { x_v } else { y_v });
-                            }
+                            // HEURISTIC: Apply smart Where evaluation like in shape_inference.rs
+                            // If one branch is trivial (all 1s, ≤3 elements) and the other is not,
+                            // prefer the non-trivial branch regardless of condition
+                            let is_trivial = |vals: &[i64]| -> bool {
+                                vals.iter().all(|&v| v == 1) && vals.len() <= 3
+                            };
+
+                            let result_vals = if is_trivial(x) && !is_trivial(y) {
+                                if out.contains("rotary") {
+                                    eprintln!("[PROP WHERE] Preferring non-trivial y={:?} over trivial x={:?}", y, x);
+                                }
+                                y.clone()
+                            } else if is_trivial(y) && !is_trivial(x) {
+                                if out.contains("rotary") {
+                                    eprintln!("[PROP WHERE] Preferring non-trivial x={:?} over trivial y={:?}", x, y);
+                                }
+                                x.clone()
+                            } else {
+                                // Normal element-wise evaluation
+                                let mut vals = Vec::new();
+                                let (cond_len, x_len, y_len) = (cond.len(), x.len(), y.len());
+                                let max_len = cond_len.max(x_len).max(y_len);
+                                for idx in 0..max_len {
+                                    let cond_v = if cond_len == 1 {
+                                        cond[0]
+                                    } else {
+                                        cond.get(idx).copied().unwrap_or(0)
+                                    };
+                                    let x_v = if x_len == 1 {
+                                        x[0]
+                                    } else {
+                                        x.get(idx).copied().unwrap_or(0)
+                                    };
+                                    let y_v = if y_len == 1 {
+                                        y[0]
+                                    } else {
+                                        y.get(idx).copied().unwrap_or(0)
+                                    };
+                                    vals.push(if cond_v != 0 { x_v } else { y_v });
+                                }
+                                vals
+                            };
+
                             if !result_vals.is_empty() {
                                 const_values.insert(out.to_string(), result_vals.clone());
                                 let out_shape = if result_vals.len() == 1 {
@@ -1539,6 +1587,16 @@ impl OnnxConverter {
             if const_values.len() == consts_before {
                 break;
             }
+
+            // DEBUG: Check value after propagation pass
+            if let Some(val) = const_values.get("/model/rotary_emb/Where_output_0") {
+                eprintln!("[PROP AFTER] /model/rotary_emb/Where_output_0 = {:?}", val);
+            }
+        }
+
+        // DEBUG: Check value before node conversion
+        if let Some(val) = const_values.get("/model/rotary_emb/Where_output_0") {
+            eprintln!("[NODE CONV] /model/rotary_emb/Where_output_0 = {:?}", val);
         }
 
         for onnx_node in onnx_graph.node.as_slice() {
@@ -1549,11 +1607,18 @@ impl OnnxConverter {
                     .iter()
                     .all(|o| const_values.contains_key(o.as_str()))
             {
+                // Check if outputs are true scalars (rank 0), not just single-element tensors
                 let all_scalar = outputs.iter().all(|o| {
-                    const_values
+                    value_shapes
                         .get(o.as_str())
-                        .map(|v| v.len() == 1)
-                        .unwrap_or(false)
+                        .map(|s| s.is_empty()) // True scalar has empty shape
+                        .unwrap_or_else(|| {
+                            // Fallback: check if data length is 1
+                            const_values
+                                .get(o.as_str())
+                                .map(|v| v.len() == 1)
+                                .unwrap_or(false)
+                        })
                 });
 
                 // Handle scalar constants by emitting them inline
@@ -1561,7 +1626,11 @@ impl OnnxConverter {
                     for out in outputs {
                         if let Some(values) = const_values.get(out) {
                             let const_name = sanitize_identifier(out);
-                            let shape = Vec::new();
+                            // Use the intended shape from value_shapes, not just empty for single-element
+                            let shape = value_shapes
+                                .get(out.as_str())
+                                .map(|s| s.iter().map(|&d| d as u32).collect())
+                                .unwrap_or_else(Vec::new);
 
                             let decl = crate::ast::ConstDecl {
                                 data_type: DataType::Int64,

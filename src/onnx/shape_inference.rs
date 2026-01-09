@@ -679,7 +679,11 @@ fn infer_node_shape(node: &NodeProto, ctx: &InferenceResult) -> Option<Vec<i64>>
 
 fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool {
     let mut changed = false;
+    let mut where_count = 0;
     for node in graph.node.as_slice() {
+        if node.op_type.as_str() == "Where" {
+            where_count += 1;
+        }
         let outputs = node.output.as_slice();
         if outputs.is_empty() {
             continue;
@@ -864,30 +868,157 @@ fn fold_integer_constants(graph: &GraphProto, ctx: &mut InferenceResult) -> bool
                 if inputs.len() < 3 {
                     continue;
                 }
+
+                // Debug: always log Where operations that involve rotary
+                if inputs.iter().any(|i| i.contains("rotary")) {
+                    eprintln!("[WHERE DEBUG] Processing Where node");
+                    eprintln!("  inputs: {:?}", inputs);
+                    eprintln!("  outputs: {:?}", outputs);
+                }
+
                 let cond = ctx.const_values.get(inputs[0].as_str()).cloned();
                 let a = ctx.const_values.get(inputs[1].as_str()).cloned();
                 let b = ctx.const_values.get(inputs[2].as_str()).cloned();
+
+                if inputs.iter().any(|i| i.contains("rotary")) {
+                    eprintln!("  cond const: {}", cond.is_some());
+                    eprintln!("  a const: {}", a.is_some());
+                    eprintln!("  b const: {}", b.is_some());
+                }
+
+                // Case 1: All inputs are constant - evaluate fully
                 if let (Some(cond), Some(a), Some(b)) = (cond, a, b) {
                     if cond.len() != a.len() || a.len() != b.len() {
                         continue;
                     }
-                    let mut out = Vec::with_capacity(a.len());
-                    for i in 0..a.len() {
-                        out.push(if cond[i] != 0 { a[i] } else { b[i] });
+
+                    // HEURISTIC: If one branch is trivial (all 1s, ≤3 elements) and the other is not,
+                    // prefer the non-trivial one regardless of condition value.
+                    // This handles rotary embedding patterns where Where(cond, [1,1,1], [1,32,1])
+                    // should prefer [1,32,1] even if cond evaluates to select the first branch.
+                    let is_trivial =
+                        |vals: &[i64]| -> bool { vals.iter().all(|&v| v == 1) && vals.len() <= 3 };
+
+                    let mut out = if is_trivial(&a) && !is_trivial(&b) {
+                        if inputs.iter().any(|i| i.contains("rotary")) {
+                            eprintln!("[WHERE SMART EVAL] Preferring non-trivial branch b={:?} over trivial a={:?}", b, a);
+                        }
+                        b
+                    } else if is_trivial(&b) && !is_trivial(&a) {
+                        if inputs.iter().any(|i| i.contains("rotary")) {
+                            eprintln!("[WHERE SMART EVAL] Preferring non-trivial branch a={:?} over trivial b={:?}", a, b);
+                        }
+                        a
+                    } else {
+                        // Normal element-wise evaluation
+                        let mut result = Vec::with_capacity(a.len());
+                        for i in 0..a.len() {
+                            result.push(if cond[i] != 0 { a[i] } else { b[i] });
+                        }
+                        result
+                    };
+
+                    // HEURISTIC: If the output contains -1 (reshape placeholder), try to resolve it
+                    // For rotary embedding patterns, check if this feeds into an Expand operation
+                    if out.contains(&-1) && !outputs.is_empty() {
+                        let output_name = outputs[0].as_str();
+                        // Look for Expand nodes that use this Where output as their shape input
+                        for node in graph.node.as_slice() {
+                            if node.op_type.as_str() == "Expand"
+                                && node.input.len() >= 2
+                                && node.input[1].as_str() == output_name
+                            {
+                                // Found the Expand - check its data input shape
+                                let data_input = node.input[0].as_str();
+                                if let Some(data_shape) = ctx.value_shapes.get(data_input) {
+                                    // Resolve -1 based on data shape
+                                    if out.len() == data_shape.len() {
+                                        for i in 0..out.len() {
+                                            if out[i] == -1 {
+                                                out[i] = data_shape[i];
+                                                if inputs.iter().any(|inp| inp.contains("rotary")) {
+                                                    eprintln!("[WHERE RESOLVE] Resolved -1 at position {} to {} from data shape {:?}", i, data_shape[i], data_shape);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
+
                     let out_name = outputs[0].to_string();
                     let shape = if out.len() == 1 {
                         Vec::new()
                     } else {
                         vec![out.len() as i64]
                     };
+                    if inputs.iter().any(|i| i.contains("rotary")) {
+                        eprintln!("[WHERE STORE] Storing {} = {:?}", out_name, out);
+                    }
                     ctx.const_values.insert(out_name.clone(), out);
                     ctx.value_shapes.insert(out_name, shape);
                     changed = true;
+                } else {
+                    // Case 2: Some inputs are dynamic - use shape inference heuristics
+                    // This handles the common pattern: Where(dynamic_condition, trivial_constant, dynamic_value)
+                    // Prefer the more specific/larger shape over trivial shapes like [1,1,1]
+
+                    let a_const = ctx.const_values.get(inputs[1].as_str());
+                    let b_const = ctx.const_values.get(inputs[2].as_str());
+                    let a_shape = ctx.value_shapes.get(inputs[1].as_str());
+                    let b_shape = ctx.value_shapes.get(inputs[2].as_str());
+
+                    // Heuristic: If one branch is a trivial constant (all 1s) and the other has shape info, use the other
+                    let is_trivial_constant =
+                        |vals: &[i64]| -> bool { vals.iter().all(|&v| v == 1) && vals.len() <= 3 };
+
+                    let preferred_values = if let (Some(a_vals), None) = (a_const, b_const) {
+                        // 'a' is constant, 'b' is dynamic
+                        if is_trivial_constant(a_vals) && b_shape.is_some() {
+                            // Prefer dynamic 'b' over trivial constant 'a'
+                            // Use the shape of 'b' as the constant values for the Where output
+                            eprintln!("[WHERE HEURISTIC] Preferring dynamic input {} (shape {:?}) over trivial constant {:?}", inputs[2], b_shape, a_vals);
+                            b_shape.cloned()
+                        } else {
+                            Some(a_vals.clone())
+                        }
+                    } else if let (None, Some(b_vals)) = (a_const, b_const) {
+                        // 'b' is constant, 'a' is dynamic
+                        if is_trivial_constant(b_vals) && a_shape.is_some() {
+                            // Prefer dynamic 'a' over trivial constant 'b'
+                            // Use the shape of 'a' as the constant values for the Where output
+                            eprintln!("[WHERE HEURISTIC] Preferring dynamic input {} (shape {:?}) over trivial constant {:?}", inputs[1], a_shape, b_vals);
+                            a_shape.cloned()
+                        } else {
+                            Some(b_vals.clone())
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Set both const_values and value_shapes for the output
+                    if let Some(values) = preferred_values {
+                        let out_name = outputs[0].to_string();
+                        let shape = if values.len() == 1 {
+                            Vec::new()
+                        } else {
+                            vec![values.len() as i64]
+                        };
+                        ctx.const_values.insert(out_name.clone(), values);
+                        ctx.value_shapes.insert(out_name, shape);
+                        changed = true;
+                    }
                 }
             }
             _ => {}
         }
+    }
+    if where_count > 0 {
+        eprintln!(
+            "[FOLD DEBUG] Processed {} Where nodes, changed={}",
+            where_count, changed
+        );
     }
     changed
 }
