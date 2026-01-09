@@ -169,6 +169,23 @@ impl GatherEvaluator {
             ))),
         }
     }
+
+    /// Check if data tensor looks like an embedding table
+    /// Heuristic: Large tensors (>10K elements) are likely embedding tables
+    /// that shouldn't be folded even if indices appear constant
+    fn is_embedding_pattern(data_name: &str, ctx: &ConstantFoldingContext) -> bool {
+        if let Some(tensor) = ctx.get_constant(data_name) {
+            let num_elements: i64 = tensor.shape.iter().product();
+            // Threshold: 10K elements
+            // - Typical embedding tables: 50K vocab × 512 dims = 25M+ elements
+            // - Shape tensors: <10 elements
+            // - Small lookup tables: <1K elements
+            if num_elements > 10000 {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl EvaluatorTrait for GatherEvaluator {
@@ -184,6 +201,12 @@ impl EvaluatorTrait for GatherEvaluator {
         // Need both data and indices to be constants
         let inputs = node.input.as_slice();
         if inputs.len() < 2 {
+            return false;
+        }
+
+        // Check if this looks like an embedding lookup pattern
+        // Don't fold these as indices may vary at runtime despite static shapes
+        if Self::is_embedding_pattern(inputs[0].as_str(), ctx) {
             return false;
         }
 

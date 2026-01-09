@@ -225,9 +225,15 @@ fn parse_call(p: Pair<Rule>) -> Result<ParsedExpr, ParseError> {
     let mut inputs: Vec<String> = Vec::new();
     let mut options: Map<String, Value> = Map::new();
 
+    // Debug: trace concat operations
+    let is_concat = op == "concat";
+    if is_concat {
+        eprintln!("[PARSER DEBUG] Parsing concat operation");
+    }
+
     if let Some(args) = it.next() {
         if args.as_rule() == Rule::args {
-            for arg in args.into_inner() {
+            for (arg_idx, arg) in args.into_inner().enumerate() {
                 if arg.as_rule() != Rule::arg {
                     continue;
                 }
@@ -239,6 +245,24 @@ fn parse_call(p: Pair<Rule>) -> Result<ParsedExpr, ParseError> {
                     None => continue,
                 };
 
+                if is_concat {
+                    eprintln!(
+                        "[PARSER DEBUG]   arg[{}]: first.rule={:?}, first.as_str()={}, has_next={}",
+                        arg_idx,
+                        first.as_rule(),
+                        first.as_str(),
+                        a.peek().is_some()
+                    );
+                    if let Some(next) = a.peek() {
+                        eprintln!(
+                            "[PARSER DEBUG]   arg[{}]: next.rule={:?}, next.as_str()={}",
+                            arg_idx,
+                            next.as_rule(),
+                            next.as_str()
+                        );
+                    }
+                }
+
                 if first.as_rule() == Rule::ident
                     && a.peek().is_some()
                     && a.peek().unwrap().as_rule() == Rule::value
@@ -246,9 +270,18 @@ fn parse_call(p: Pair<Rule>) -> Result<ParsedExpr, ParseError> {
                     // Named argument
                     let key = first.as_str().to_string();
                     let val = parse_value(a.next().unwrap())?;
+                    if is_concat {
+                        eprintln!("[PARSER DEBUG]   Named argument: {}={:?}", key, val);
+                    }
                     options.insert(key, val);
                 } else {
                     // Positional argument
+                    if is_concat {
+                        eprintln!(
+                            "[PARSER DEBUG]   Positional argument: rule={:?}",
+                            first.as_rule()
+                        );
+                    }
                     match first.as_rule() {
                         Rule::value => {
                             let v = parse_value(first)?;
@@ -264,6 +297,13 @@ fn parse_call(p: Pair<Rule>) -> Result<ParsedExpr, ParseError> {
                 }
             }
         }
+    }
+
+    if is_concat {
+        eprintln!(
+            "[PARSER DEBUG] Concat parsed: inputs={:?}, options={:?}",
+            inputs, options
+        );
     }
 
     Ok((op, inputs, options, None))

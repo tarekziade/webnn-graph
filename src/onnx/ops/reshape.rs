@@ -400,10 +400,31 @@ impl ReshapeHandler {
         let shape_input_raw = inputs[1].to_string();
         let data_input = context.resolve_input(&data_input_raw);
 
+        // Debug logging for all Expand operations
+        if shape_input_raw.contains("rotary") || data_input_raw.contains("rotary") {
+            eprintln!("[EXPAND DEBUG] Node: {}", node_name);
+            eprintln!("  data_input_raw: {}", data_input_raw);
+            eprintln!("  shape_input_raw: {}", shape_input_raw);
+            eprintln!(
+                "  In const_values: {}",
+                context.const_values.contains_key(&shape_input_raw)
+            );
+            eprintln!(
+                "  In initializers: {}",
+                context.initializers.contains_key(shape_input_raw.as_str())
+            );
+        }
+
         let shape_values: Vec<i64> =
             if let Some(values) = context.const_values.get(&shape_input_raw) {
+                if shape_input_raw.contains("rotary") || data_input_raw.contains("rotary") {
+                    eprintln!("  Shape from const_values: {:?}", values);
+                }
                 values.clone()
             } else if let Some(initializer) = context.initializers.get(shape_input_raw.as_str()) {
+                if shape_input_raw.contains("rotary") || data_input_raw.contains("rotary") {
+                    eprintln!("  Shape from initializer");
+                }
                 let raw_data = initializer.raw_data.as_slice();
                 if !raw_data.is_empty() {
                     match initializer.data_type {
