@@ -3,8 +3,8 @@
 // to unblock reshape/axes/starts/ends calculations. Dynamic dims cause errors so
 // callers can ask users to run onnx-simplifier or provide overrides.
 use crate::ast::DataType;
+use crate::onnx::convert::map_onnx_data_type;
 use crate::onnx::ir::{Dim, OnnxIrGraph, TensorShape, TensorType};
-use crate::onnx::types::map_onnx_data_type;
 use crate::protos::onnx::{
     tensor_shape_proto::dimension::Value as DimensionValue, type_proto::Value as TypeProtoValue,
     GraphProto, ModelProto, NodeProto, TensorProto, TensorProto_DataType,

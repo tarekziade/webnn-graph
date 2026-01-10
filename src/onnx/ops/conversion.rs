@@ -77,7 +77,7 @@ impl ConversionHandler {
         let input0 = context.resolve_input(&inputs[0]);
 
         // Map ONNX type to WebNN DataType
-        let target_type = crate::onnx::types::map_onnx_data_type(to_type.unwrap() as i32)?;
+        let target_type = crate::onnx::convert::map_onnx_data_type(to_type.unwrap() as i32)?;
 
         let mut options = Map::new();
         options.insert(
@@ -132,7 +132,7 @@ impl ConversionHandler {
 
         let tensor = value_tensor.unwrap();
         let onnx_type = tensor.data_type;
-        let data_type = crate::onnx::types::map_onnx_data_type(onnx_type)?;
+        let data_type = crate::onnx::convert::map_onnx_data_type(onnx_type)?;
 
         let shape: Vec<i64> = tensor.dims.as_slice().to_vec();
         let raw_data = tensor.raw_data.as_slice().to_vec();

@@ -1,7 +1,6 @@
 // Main ONNX to WebNN conversion logic
 
 use crate::ast::{DataType, GraphJson};
-use crate::onnx::types::TypeConversionError;
 use crate::protos::onnx::{
     tensor_shape_proto::dimension::Value as DimensionValue, type_proto::Value as TypeProtoValue,
     ModelProto, TensorProto, TensorProto_DataType,
@@ -12,7 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
-use webnn_onnx_utils::identifiers;
+use webnn_onnx_utils::{data_types as utils_data_types, identifiers};
 
 const MIN_SUPPORTED_OPSET: i64 = 11;
 const MAX_SUPPORTED_OPSET: i64 = 18;
@@ -38,7 +37,7 @@ pub enum OnnxError {
     InvalidShape(String),
 
     #[error("type conversion error: {0}")]
-    TypeConversion(#[from] TypeConversionError),
+    TypeConversion(#[from] webnn_onnx_utils::error::ConversionError),
 
     #[error("shape inference failed for node: {0}")]
     ShapeInference(String),
@@ -48,6 +47,21 @@ pub enum OnnxError {
 /// Replaces problematic characters that would confuse the parser
 pub fn sanitize_identifier(name: &str) -> String {
     identifiers::sanitize_for_webnn(name)
+}
+
+/// Convert ONNX data type code to WebNN DataType using shared utilities
+pub(crate) fn map_onnx_data_type(onnx_type: i32) -> Result<DataType, OnnxError> {
+    let utils_dtype = utils_data_types::onnx_to_webnn(onnx_type)?;
+    Ok(match utils_dtype {
+        utils_data_types::DataType::Float32 => DataType::Float32,
+        utils_data_types::DataType::Float16 => DataType::Float16,
+        utils_data_types::DataType::Int32 => DataType::Int32,
+        utils_data_types::DataType::Uint32 => DataType::Uint32,
+        utils_data_types::DataType::Int64 => DataType::Int64,
+        utils_data_types::DataType::Uint64 => DataType::Uint64,
+        utils_data_types::DataType::Int8 => DataType::Int8,
+        utils_data_types::DataType::Uint8 => DataType::Uint8,
+    })
 }
 
 /// Infer output shape for an ONNX node based on its operation type and inputs
@@ -717,7 +731,7 @@ impl OnnxConverter {
                 if let Some(TypeProtoValue::TensorType(tensor_type)) = &type_proto.value {
                     let data_type = if tensor_type.elem_type != 0 {
                         let onnx_type = tensor_type.elem_type;
-                        crate::onnx::types::map_onnx_data_type(onnx_type)?
+                        map_onnx_data_type(onnx_type)?
                     } else {
                         DataType::Float32 // Default
                     };
@@ -817,7 +831,7 @@ impl OnnxConverter {
             }
 
             let onnx_type = initializer.data_type;
-            let data_type = crate::onnx::types::map_onnx_data_type(onnx_type)?;
+            let data_type = map_onnx_data_type(onnx_type)?;
             let shape: Vec<u32> = initializer
                 .dims
                 .as_slice()
@@ -1877,7 +1891,7 @@ fn extract_weights_from_onnx(
 
         // Convert ONNX data type enum to i32, then to WebNN DataType
         let onnx_type = initializer.data_type;
-        let data_type = crate::onnx::types::map_onnx_data_type(onnx_type)?;
+        let data_type = map_onnx_data_type(onnx_type)?;
 
         let shape: Vec<u32> = initializer
             .dims

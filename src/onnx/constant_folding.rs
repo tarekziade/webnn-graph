@@ -107,7 +107,7 @@ impl TensorData {
                     raw_data.iter().map(|&x| x as i8).collect(),
                 )),
                 _ => Err(OnnxError::TypeConversion(
-                    crate::onnx::types::TypeConversionError::UnsupportedDataType(data_type),
+                    webnn_onnx_utils::error::ConversionError::UnsupportedOnnxDataType(data_type),
                 )),
             }
         } else {
@@ -126,7 +126,7 @@ impl TensorData {
                     Ok(TensorData::Float64(tensor.double_data.as_slice().to_vec()))
                 }
                 _ => Err(OnnxError::TypeConversion(
-                    crate::onnx::types::TypeConversionError::UnsupportedDataType(data_type),
+                    webnn_onnx_utils::error::ConversionError::UnsupportedOnnxDataType(data_type),
                 )),
             }
         }
