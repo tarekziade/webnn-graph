@@ -40,29 +40,8 @@ WebNN executes in browsers and edge devices where:
 ### Method 1: Using Python + ONNX
 
 ```python
-import onnx
-
-# Load the model
-model = onnx.load('model.onnx')
-
-# Inspect input shapes
-print("Model Inputs:")
-for input in model.graph.input:
-    print(f"  Name: {input.name}")
-    shape_info = input.type.tensor_type.shape
-    dims = []
-    for dim in shape_info.dim:
-        if dim.dim_param:
-            dims.append(f"{dim.dim_param} (dynamic)")
-        else:
-            dims.append(str(dim.dim_value))
-    print(f"  Shape: [{', '.join(dims)}]")
-    print()
-
-# Check for dimension overrides in metadata
-for prop in model.metadata_props:
-    if 'dimension' in prop.key.lower():
-        print(f"Metadata: {prop.key} = {prop.value}")
+pip install onnxslim
+onnxslim --inspect model.onnx
 ```
 
 ### Method 2: Using Netron
