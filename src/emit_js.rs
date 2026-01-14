@@ -4,6 +4,8 @@ fn dt_to_js(dt: &DataType) -> &'static str {
     match dt {
         DataType::Float32 => "float32",
         DataType::Float16 => "float16",
+        DataType::Int4 => "int4",
+        DataType::Uint4 => "uint4",
         DataType::Int32 => "int32",
         DataType::Uint32 => "uint32",
         DataType::Int64 => "int64",
@@ -211,6 +213,8 @@ mod tests {
     fn test_dt_to_js() {
         assert_eq!(dt_to_js(&DataType::Float32), "float32");
         assert_eq!(dt_to_js(&DataType::Float16), "float16");
+        assert_eq!(dt_to_js(&DataType::Int4), "int4");
+        assert_eq!(dt_to_js(&DataType::Uint4), "uint4");
         assert_eq!(dt_to_js(&DataType::Int32), "int32");
         assert_eq!(dt_to_js(&DataType::Uint32), "uint32");
         assert_eq!(dt_to_js(&DataType::Int64), "int64");

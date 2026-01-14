@@ -581,8 +581,9 @@ impl OnnxConverter {
 
         let graph = GraphJson {
             format: "webnn-graph-json".to_string(),
-            version: 1,
+            version: 2,
             name: Some(graph_name),
+            quantized: false,
             inputs: BTreeMap::new(),
             consts: BTreeMap::new(),
             nodes: Vec::new(),
