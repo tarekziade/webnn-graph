@@ -10,18 +10,12 @@ pub enum SerializeError {
 }
 
 /// Serialization options.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SerializeOptions {
     /// When true, emits `@quantized` annotation on the graph header to signal
     /// that tensors/constants are already quantized and should be preserved as-is.
     /// Downstream tools can use this hint to avoid dequantizing or re-quantizing.
     pub quantized: bool,
-}
-
-impl Default for SerializeOptions {
-    fn default() -> Self {
-        SerializeOptions { quantized: false }
-    }
 }
 
 pub fn serialize_graph_to_wg_text(
