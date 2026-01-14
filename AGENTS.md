@@ -287,9 +287,9 @@ const result2 = await context.compute(graph, { x: input2 });
 ### Module Structure
 
 - **ast.rs**: Core data structures for the graph JSON format
-  - `GraphJson`: Top-level structure containing inputs, consts, nodes, outputs
+  - `GraphJson`: Top-level structure containing inputs, consts, nodes, outputs, and optional quantized flag
   - `OperandDesc`: Describes tensor shape and data type
-  - `DataType`: Enum for f32, f16, i32, u32, i64, u64, i8, u8
+  - `DataType`: Enum for f32, f16, i4, u4, i32, u32, i64, u64, i8, u8
   - `ConstDecl`: Constant declarations with initialization (weights, scalar, or inline bytes)
   - `Node`: Represents operations with inputs, options, and outputs
 
@@ -347,6 +347,16 @@ webnn_graph "name" v1 {
   outputs { result; }
 }
 ```
+
+**Note**: For quantized graphs, add the `@quantized` annotation in the header:
+```
+webnn_graph "name" v1 @quantized {
+  ...
+}
+```
+
+This sets the `quantized` field to `true` in the JSON representation, indicating the graph contains quantized
+weights or operations using Int4/Uint4 data types.
 
 ### Data Flow
 
