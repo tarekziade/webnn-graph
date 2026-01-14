@@ -38,7 +38,7 @@ Its EBNF-like grammar:
 ```
 File         ::= Header Block* EOF
 
-Header       ::= "webnn_graph" String "v" Int "{"
+Header       ::= "webnn_graph" String "v" Int ("@quantized")? "{"
 
 Block        ::= InputsBlock
                | ConstsBlock
@@ -75,7 +75,7 @@ Boolean      ::= "true" | "false"
 Null         ::= "null"
 
 Type         ::= DType Shape
-DType        ::= "f32" | "f16" | "i32" | "u32" | "i64" | "u64" | "i8" | "u8"
+DType        ::= "f32" | "f16" | "i4" | "u4" | "i32" | "u32" | "i64" | "u64" | "i8" | "u8"
 Shape        ::= "[" (Int ("," Int)*)? "]"
 
 ConstAnnot   ::= "@weights" "(" String ")"
@@ -201,7 +201,7 @@ Types use:
 dtype[dim0, dim1, ...]
 ```
 
-Supported dtypes: `f32`, `f16`, `i32`, `u32`,`i64`, `u64`, `i8`, `u8`.
+Supported dtypes: `f32`, `f16`, `i4`, `u4`, `i32`, `u32`, `i64`, `u64`, `i8`, `u8`.
 
 ## ONNX to WebNN Conversion
 

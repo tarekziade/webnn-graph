@@ -40,11 +40,19 @@ pub fn parse_wg_text(input: &str) -> Result<GraphJson, ParseError> {
     for p in file.into_inner() {
         match p.as_rule() {
             Rule::header => {
-                // Extract graph name from header
+                // Extract graph name, version, quantized flag from header
                 for inner in p.into_inner() {
-                    if inner.as_rule() == Rule::string {
-                        g.name = Some(unquote(inner.as_str()));
-                        break;
+                    match inner.as_rule() {
+                        Rule::string => g.name = Some(unquote(inner.as_str())),
+                        Rule::int => {
+                            let version: u32 = inner
+                                .as_str()
+                                .parse()
+                                .map_err(|e| ParseError::Internal(format!("bad version: {}", e)))?;
+                            g.version = version;
+                        }
+                        Rule::quantized => g.quantized = true,
+                        _ => {}
                     }
                 }
             }

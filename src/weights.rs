@@ -28,6 +28,7 @@ pub fn dtype_size(dt: &DataType) -> u64 {
     match dt {
         DataType::Float32 => 4,
         DataType::Float16 => 2,
+        DataType::Int4 | DataType::Uint4 => 1, // byte-per-value for 4-bit storage
         DataType::Int32 => 4,
         DataType::Uint32 => 4,
         DataType::Int64 => 8,
@@ -51,6 +52,8 @@ mod tests {
     fn test_dtype_size() {
         assert_eq!(dtype_size(&DataType::Float32), 4);
         assert_eq!(dtype_size(&DataType::Float16), 2);
+        assert_eq!(dtype_size(&DataType::Int4), 1);
+        assert_eq!(dtype_size(&DataType::Uint4), 1);
         assert_eq!(dtype_size(&DataType::Int32), 4);
         assert_eq!(dtype_size(&DataType::Uint32), 4);
         assert_eq!(dtype_size(&DataType::Int64), 8);

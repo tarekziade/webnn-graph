@@ -44,6 +44,9 @@ enum Command {
     },
     Serialize {
         path: String,
+        /// Mark output as quantized (adds @quantized flag to header/options)
+        #[arg(long)]
+        quantized: bool,
     },
     PackWeights {
         #[arg(long)]
@@ -190,10 +193,17 @@ fn main() -> anyhow::Result<()> {
             let html = emit_html(&g);
             print!("{html}");
         }
-        Command::Serialize { path } => {
+        Command::Serialize { path, quantized } => {
             let txt = fs::read_to_string(path)?;
             let g: GraphJson = serde_json::from_str(&txt)?;
-            let wg_text = serialize_graph_to_wg_text(&g)?;
+            let mut g = g;
+            if quantized {
+                g.quantized = true;
+            }
+            let wg_text = serialize_graph_to_wg_text(
+                &g,
+                webnn_graph::serialize::SerializeOptions { quantized },
+            )?;
             print!("{}", wg_text);
         }
         Command::PackWeights {
@@ -332,7 +342,10 @@ fn main() -> anyhow::Result<()> {
             let output_content = if output_path.ends_with(".json") {
                 serde_json::to_string_pretty(&graph)?
             } else {
-                serialize_graph_to_wg_text(&graph)?
+                serialize_graph_to_wg_text(
+                    &graph,
+                    webnn_graph::serialize::SerializeOptions::default(),
+                )?
             };
 
             fs::write(&output_path, output_content)?;

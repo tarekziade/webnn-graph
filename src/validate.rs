@@ -37,7 +37,7 @@ pub enum ValidateError {
 }
 
 pub fn validate_graph(g: &GraphJson) -> Result<(), ValidateError> {
-    if g.format != "webnn-graph-json" || g.version != 1 {
+    if g.format != "webnn-graph-json" || (g.version != 1 && g.version != 2) {
         return Err(ValidateError::BadFormat(g.format.clone(), g.version));
     }
     if g.outputs.is_empty() {

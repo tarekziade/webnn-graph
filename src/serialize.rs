@@ -9,20 +9,42 @@ pub enum SerializeError {
     UnsupportedVersion(u32),
 }
 
-pub fn serialize_graph_to_wg_text(graph: &GraphJson) -> Result<String, SerializeError> {
+/// Serialization options.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SerializeOptions {
+    /// When true, emits `@quantized` annotation on the graph header to signal
+    /// that tensors/constants are already quantized and should be preserved as-is.
+    /// Downstream tools can use this hint to avoid dequantizing or re-quantizing.
+    pub quantized: bool,
+}
+
+pub fn serialize_graph_to_wg_text(
+    graph: &GraphJson,
+    opts: SerializeOptions,
+) -> Result<String, SerializeError> {
     let mut output = String::new();
 
     // Validate format
     if graph.format != "webnn-graph-json" {
         return Err(SerializeError::InvalidFormat(graph.format.clone()));
     }
-    if graph.version != 1 {
+    if graph.version != 1 && graph.version != 2 {
         return Err(SerializeError::UnsupportedVersion(graph.version));
     }
 
     // Header
     let name = graph.name.as_deref().unwrap_or("graph");
-    output.push_str(&format!("webnn_graph \"{}\" v1 {{\n", escape_string(name)));
+    let quantized_flag = if opts.quantized || graph.quantized {
+        " @quantized"
+    } else {
+        ""
+    };
+    output.push_str(&format!(
+        "webnn_graph \"{}\" v{}{} {{\n",
+        escape_string(name),
+        graph.version,
+        quantized_flag
+    ));
 
     // Inputs block
     if !graph.inputs.is_empty() {
@@ -170,8 +192,8 @@ mod tests {
         });
         g.outputs.insert("result".to_string(), "result".to_string());
 
-        let text = serialize_graph_to_wg_text(&g).unwrap();
-        assert!(text.contains("webnn_graph \"test\" v1"));
+        let text = serialize_graph_to_wg_text(&g, SerializeOptions::default()).unwrap();
+        assert!(text.contains(&format!("webnn_graph \"test\" v{}", g.version)));
         assert!(text.contains("inputs {"));
         assert!(text.contains("x: f32[1, 10];"));
         assert!(text.contains("nodes {"));
@@ -195,7 +217,7 @@ mod tests {
         );
         g.outputs.insert("W".to_string(), "W".to_string());
 
-        let text = serialize_graph_to_wg_text(&g).unwrap();
+        let text = serialize_graph_to_wg_text(&g, SerializeOptions::default()).unwrap();
         assert!(text.contains("W: f32[10, 5] @weights(\"W\");"));
     }
 
@@ -215,7 +237,7 @@ mod tests {
         );
         g.outputs.insert("scale".to_string(), "scale".to_string());
 
-        let text = serialize_graph_to_wg_text(&g).unwrap();
+        let text = serialize_graph_to_wg_text(&g, SerializeOptions::default()).unwrap();
         assert!(text.contains("scale: f32[1] @scalar(3.5);"));
     }
 
@@ -239,7 +261,7 @@ mod tests {
         });
         g.outputs.insert("a".to_string(), "a".to_string());
 
-        let text = serialize_graph_to_wg_text(&g).unwrap();
+        let text = serialize_graph_to_wg_text(&g, SerializeOptions::default()).unwrap();
         assert!(text.contains("[a, b] = split(x);"));
     }
 
@@ -268,7 +290,7 @@ mod tests {
         });
         g.outputs.insert("result".to_string(), "result".to_string());
 
-        let text = serialize_graph_to_wg_text(&g).unwrap();
+        let text = serialize_graph_to_wg_text(&g, SerializeOptions::default()).unwrap();
         assert!(text.contains("softmax(x,"));
         assert!(text.contains("axis=1"));
         assert!(text.contains("keepdims=true"));
@@ -302,7 +324,7 @@ mod tests {
         g.outputs
             .insert("f32_input".to_string(), "f32_input".to_string());
 
-        let text = serialize_graph_to_wg_text(&g).unwrap();
+        let text = serialize_graph_to_wg_text(&g, SerializeOptions::default()).unwrap();
         assert!(text.contains("f32_input: f32[1];"));
         assert!(text.contains("f16_input: f16[1];"));
         assert!(text.contains("i32_input: i32[1];"));
@@ -336,7 +358,7 @@ webnn_graph "resnet_head" v1 {
         let graph = parse_wg_text(input).unwrap();
 
         // Serialize back to text
-        let serialized = serialize_graph_to_wg_text(&graph).unwrap();
+        let serialized = serialize_graph_to_wg_text(&graph, SerializeOptions::default()).unwrap();
 
         // Parse again to verify structure is preserved
         let graph2 = parse_wg_text(&serialized).unwrap();
@@ -355,8 +377,8 @@ webnn_graph "resnet_head" v1 {
         // No name set (None)
         g.outputs.insert("x".to_string(), "x".to_string());
 
-        let text = serialize_graph_to_wg_text(&g).unwrap();
-        assert!(text.contains("webnn_graph \"graph\" v1"));
+        let text = serialize_graph_to_wg_text(&g, SerializeOptions::default()).unwrap();
+        assert!(text.contains(&format!("webnn_graph \"graph\" v{}", g.version)));
     }
 
     #[test]
@@ -365,8 +387,11 @@ webnn_graph "resnet_head" v1 {
         g.name = Some("test\"with\\quotes".to_string());
         g.outputs.insert("x".to_string(), "x".to_string());
 
-        let text = serialize_graph_to_wg_text(&g).unwrap();
-        assert!(text.contains("webnn_graph \"test\\\"with\\\\quotes\" v1"));
+        let text = serialize_graph_to_wg_text(&g, SerializeOptions::default()).unwrap();
+        assert!(text.contains(&format!(
+            "webnn_graph \"test\\\"with\\\\quotes\" v{}",
+            g.version
+        )));
     }
 
     #[test]
@@ -397,7 +422,7 @@ webnn_graph "resnet_head" v1 {
         });
         g.outputs.insert("result".to_string(), "result".to_string());
 
-        let text = serialize_graph_to_wg_text(&g).unwrap();
+        let text = serialize_graph_to_wg_text(&g, SerializeOptions::default()).unwrap();
         assert!(text.contains("int_val=42"));
         assert!(text.contains("float_val=3.5"));
         assert!(text.contains("bool_val=true"));

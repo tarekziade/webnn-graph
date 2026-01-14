@@ -4,9 +4,11 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphJson {
     pub format: String, // "webnn-graph-json"
-    pub version: u32,   // 1
+    pub version: u32,   // 1 or 2
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default)]
+    pub quantized: bool,
     pub inputs: BTreeMap<String, OperandDesc>,
     #[serde(default)]
     pub consts: BTreeMap<String, ConstDecl>,
@@ -28,6 +30,10 @@ pub enum DataType {
     Float32,
     #[serde(rename = "float16")]
     Float16,
+    #[serde(rename = "int4")]
+    Int4,
+    #[serde(rename = "uint4")]
+    Uint4,
     #[serde(rename = "int32")]
     Int32,
     #[serde(rename = "uint32")]
@@ -47,6 +53,8 @@ impl DataType {
         match s {
             "f32" => Some(Self::Float32),
             "f16" => Some(Self::Float16),
+            "i4" => Some(Self::Int4),
+            "u4" => Some(Self::Uint4),
             "i32" => Some(Self::Int32),
             "u32" => Some(Self::Uint32),
             "i64" => Some(Self::Int64),
@@ -61,6 +69,8 @@ impl DataType {
         match self {
             Self::Float32 => "f32",
             Self::Float16 => "f16",
+            Self::Int4 => "i4",
+            Self::Uint4 => "u4",
             Self::Int32 => "i32",
             Self::Uint32 => "u32",
             Self::Int64 => "i64",
@@ -101,8 +111,9 @@ pub struct Node {
 pub fn new_graph_json() -> GraphJson {
     GraphJson {
         format: "webnn-graph-json".to_string(),
-        version: 1,
+        version: 2,
         name: None,
+        quantized: false,
         inputs: BTreeMap::new(),
         consts: BTreeMap::new(),
         nodes: Vec::new(),
@@ -132,7 +143,7 @@ mod tests {
     fn test_new_graph_json() {
         let graph = new_graph_json();
         assert_eq!(graph.format, "webnn-graph-json");
-        assert_eq!(graph.version, 1);
+        assert_eq!(graph.version, 2);
         assert!(graph.inputs.is_empty());
         assert!(graph.consts.is_empty());
         assert!(graph.nodes.is_empty());
